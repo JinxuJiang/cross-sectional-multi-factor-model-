@@ -1,0 +1,169 @@
+截面多因子量化选股系统 (C-MFSS) 设计文档
+一、 系统愿景 (System Vision)
+本系统旨在通过因果逻辑（Causal Logic）驱动的因子挖掘与非线性 AI 建模相结合，构建一个跨周期的 Alpha 捕捉机器。
+核心准则： 逻辑领先于代码，相关性服务于因果。
+目标： 实现 Alpha 与 Beta 的彻底分离，通过 15-20 个低相关因子流实现“交易圣杯”。
+二、 文件夹结构 (Project Structure)
+采用“按家族分类、逻辑聚合”的模式，兼顾开发效率与系统可维护性。
+
+Quant_Project_v2/
+├── data/                        # 数据仓库 (Parquet格式)
+    ├── raw_data/                     # 原始行情、财务数据、行业数据、元数据
+        ├──financial_data
+        ├──market_data
+        ├──industry_map
+        ├──stock_info
+    └── processed/               # 计算好的因子大宽表
+        ├── price_data/                # 基础行情（对齐后的）
+        │   ├── close.parquet          # 行是日期，列是股票
+        │   ├── open.parquet
+        │   └── volume.parquet
+        ├── technical_factors/         # 技术因子库
+        │   ├── rsi_14.parquet         # 每个因子一个文件
+        │   ├── ma_20.parquet
+        │   └── momentum_10d.parquet
+        └── financial_factors/         # 财务因子库
+            ├── roe_pit.parquet
+            └── pe_ratio.parquet
+├── src/                         # 源代码库
+│   ├── data_engine/             # Module 1: 数据提取与PIT对齐
+│   │   ├── downloader.py
+│   │   └── loader.py
+│   ├── alpha_factory/           # Module 2: 因子工厂 (核心)
+│   │   ├── __init__.py
+│   │   ├── base_factor.py       # 因子基类
+│   │   ├── technical/           # 技术因子家族 (时序/价量逻辑)
+│   │   │   ├── momentum.py      # 动量、趋势
+│   │   │   └── volatility.py    # 波动率、风险
+│   │   ├── financial/           # 财务因子家族 (基本面因果逻辑)
+│   │   │   ├── profitability.py # 盈利能力 (ROE/ROA)
+│   │   │   └── valuation.py     # 估值水平 (PE/PB)
+│   │   └── ml_factors/          # 机器学习因子 (非线性特征)
+│   │       └── embeddings.py
+│   ├── processors/              # 因子清洗与标准化 (炼金炉)
+│   │   ├── cleaner.py           # 去极值、中性化、标准化
+│   │   └── pipeline.py          # 串联清洗流程
+│   ├── models/                  # Module 3: Alpha 组合器
+│   │   ├── trainer.py           # LightGBM/XGBoost 训练逻辑
+│   │   └── evaluator.py         # IC/IR 评价
+│   └── backtester/              # Module 4: 组合优化与回测
+│       ├── optimizer.py         # 换手率/行业约束下头寸计算
+│       └── engine.py            # 向量化回测引擎
+├── configs/                     # 配置文件 (YAML)
+├── experiments/                 # 实验记录 (MLflow/Notebooks)
+└── main.py                      # 系统总入口
+三、 核心模块设计逻辑
+1. Alpha Factory (因子工厂)
+实现方式： 不采用“一因子一文件”，采用**“一家族一文件”**。
+类设计： 每个家族文件内部定义一个类（如 TechnicalFactors），每个具体因子作为一个 method。
+要求： 每个因子方法必须包含 Docstring，注明其经济学因果逻辑。
+code
+Python
+def factor_roe_growth(self):
+    """
+    因果逻辑：ROE持续增长代表公司内生动力增强，且具备复利效应，
+    在截面中应获得超额收益。
+    """
+    return self.financial_data['roe'].diff()
+2. Alpha Cleaner (因子预处理)
+因子计算完成后，统一进入清洗流程。流程顺序遵循量化界标准：
+PIT 对齐： 确保财务数据在计算时已公告，杜绝未来函数。
+去极值 (Winsorize)： 采用 MAD 或 3-sigma 算法剔除离群值。
+填补缺失值 (Fillna)： 按行业中位数或均值填补。
+标准化 (Standardize)： Z-score 或 Rank 标准化，使因子具备可比性。
+中性化 (Neutralize)： 对行业（申万一级）和市值（Ln_Cap）进行残差化处理，剥离已知 Beta 风险。
+3. Alpha Combiner (AI 训练)
+模型选择： 首选 LightGBM，利用其处理非线性关系和特征缺失的天然优势。
+训练策略： 采用 Walk-forward (滚动预测)。例如：用前 12 个月数据训练，预测第 13 个月的截面收益。
+四、 开发阶段路线图
+第一阶段：基础设施与数据对齐
+实现 DataEngine，将原始数据转为 Parquet。
+重点攻克 PIT (Point-in-Time) 对齐算法，解决财务数据滞后问题。
+第二阶段：因子库初步构建
+完成 10个技术因子 与 10个财务因子。
+编写 AlphaCleaner 脚本，实现自动化清洗 Pipeline。
+第三阶段：AI 模型集成
+接入 LightGBM，实现因子原始值到预测分数的映射。
+进行 IC/IR 测试，验证单因子的解释力与组合后的协同效应。
+第四阶段：回测与参数优化
+构建回测引擎，加入交易成本（如单边 1.5‰）和滑点模拟。
+分析回测结果的风险指标（最大回撤、夏普比率）。
+
+“工业级”结构：One Factor, One File (按因子存储)
+在 processed/ 文件夹下，每一个因子存成一个独立的 Parquet 文件。
+文件格式： factor_name.parquet
+表格形态： Index 是时间 (Date)，Columns 是股票代码 (Ticker)。
+数据内容： 单元格里就是该股票在当天的因子值。
+
+
+
+  processed_data/
+  ├── market_data/              # 行情基础数据（已存在）
+  │   ├── close.parquet
+  │   └── ...
+  ├── financial_data/           # 财务基础数据（PIT对齐后的原始字段）
+  │   ├── cap_stk.parquet       # 总股本
+  │   ├── roe_ttm.parquet       # TTM净资产收益率
+  │   ├── net_profit_ttm.parquet
+  │   ├── revenue_ttm.parquet
+  │   ├── tot_assets.parquet
+  │   ├── tot_shrhldr_eqy.parquet
+  │   ├── total_current_assets.parquet
+  │   └── industry.parquet      # 行业映射（从csv转换）
+  ├── financial_factors/        # 财务因子（衍生计算结果）
+  │   ├── pe_ratio.parquet      # 市盈率 = 市值/净利润_TTM
+  │   ├── pb_ratio.parquet      # 市净率 = 市值/净资产
+  │   ├── roe_growth.parquet    # ROE增长率
+  │   └── ...
+  └── technical_factors/        # 技术因子（已存在）
+      └── ret20.parquet
+
+
+  src/
+  ├── data_engine/              # 数据引擎（只做数据对齐，不做因子计算）
+  │   ├── market_data_loader.py
+  │   ├── financial_data_loader.py  # 财务数据PIT对齐
+  │   ├── pit_aligner.py
+  │   ├── industry_loader.py        # 行业数据加载
+  │   ├── main_prepare_market_data.py
+  │   └── main_prepare_financial_data.py
+  ├── alpha_factory/
+  │   ├── technical/            # 技术因子（已存在）
+  │   │   ├── momentum.py
+  │   │   └── main_compute_technical.py
+  │   └── financial/            # 财务因子（新建）
+  │       ├── __init__.py
+  │       ├── valuation.py      # 估值家族：PE, PB, PS
+  │       ├── profitability.py  # 盈利家族：ROE growth, ROA
+  │       ├── quality.py        # 质量家族：资产周转率等
+  │       └── main_compute_financial.py
+  └── processors/               # 清洗流程（去极值、中性化、标准化）
+      ├── outlier.py
+      ├── neutralizer.py
+      ├── standardizer.py
+      └── pipeline.py
+
+
+
+截面多因子模型/
+├── 数据/
+│   ├── data/raw_data/           # 原始数据
+│   └── tests/                   # 原始数据检验脚本
+│       ├── test_raw_integrity.py   # 完整性检验
+│       └── test_raw_sampling.py    # API抽样回测
+│
+├── 因子库/
+│   ├── processed_data/          # 处理后数据
+│   └── tests/                   # 处理后数据检验脚本
+│       ├── test_pit_alignment.py   # PIT对齐检验
+│       ├── test_ttm_calc.py        # TTM计算检验
+│       └── test_cross_table.py     # 跨表一致性
+│
+└── validation/                  # 【统一入口】
+├── init.py
+├── run_all_tests.py         # 一键运行所有检验
+├── configs/                 # 检验配置
+│   ├── raw_data_rules.yaml
+│   └── processed_rules.yaml
+└── reports/                 # 检验报告输出
+└── 20260226_204501_report.md
