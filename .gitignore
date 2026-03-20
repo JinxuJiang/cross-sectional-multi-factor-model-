@@ -1,0 +1,36 @@
+# Data files
+*.parquet
+
+# Folders
+xtquant/
+xtquant_250807/
+00_QMT_API知识库/
+01数据/01_QMT_API知识库/
+validation/
+test/
+**/test/
+01数据/tests/
+01数据/data/raw_data/
+数据/data/raw_data/
+
+# Output
+*.png
+*.jpg
+equity_curve.png
+backtest_results/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Log
+*.log
