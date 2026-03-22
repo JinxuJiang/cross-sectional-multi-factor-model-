@@ -4,7 +4,7 @@ from xtquant import xtdata
 from tqdm import tqdm
 
 class DataEngine:
-    def __init__(self, data_path=r'C:\Users\蒋大王\Desktop\量化\截面多因子模型\数据\data\raw_data'):
+    def __init__(self, data_path=r'C:\Users\蒋大王\Desktop\量化\截面多因子模型\01数据\data\raw_data'):
         self.root_path = data_path
         self.price_path = os.path.join(data_path, 'market_data')
         self.fin_path = os.path.join(data_path, 'financial_data')
@@ -58,14 +58,15 @@ class DataEngine:
         batch_size = 300 # 按照你的要求，每批处理 300 只
         
         FIELD_MAP = {'m_timetag': 'report_date'}
-        target_tables = ['Income', 'Balance', 'Indicator', 'CashFlow']
+        target_tables = ['Income', 'Balance', 'CashFlow', 'PershareIndex']
+        # 注意：QMT中没有Indicator表，财务指标数据在PershareIndex中提供
 
-        print(f"🚀 开始分批作业：总计 {len(stock_list)} 只股票，每批 {batch_size} 只")
+        print(f"[启动] 开始分批作业：总计 {len(stock_list)} 只股票，每批 {batch_size} 只")
 
         for i in range(0, len(stock_list), batch_size):
             batch = stock_list[i : i + batch_size]
             current_batch_num = i // batch_size + 1
-            print(f"\n📦 正在处理第 {current_batch_num} 批次 ({i} - {i + len(batch)})")
+            print(f"\n[批次] 正在处理第 {current_batch_num} 批次 ({i} - {i + len(batch)})")
 
             # 1. 触发该批次的异步下载
             xtdata.download_financial_data2(batch, start_time=start_time, end_time=end_time)
@@ -108,25 +109,29 @@ class DataEngine:
                             combined_df = pd.merge(combined_df, df, on=['report_date', 'm_anntime'], 
                                                 how='outer', suffixes=('', f'_{table_name}'))
 
-                    if combined_df is not None:
-                        # --- 极度求真：行压缩与向后填充 ---
-                        # 1. 合并同一天同一期的记录
+                    if combined_df is not None and not combined_df.empty:
+                        # --- 两步清洗（V2）---
+                        # 步骤0: 合并同一(report_date, m_anntime)的多行（四表外连接后去重）
                         combined_df = combined_df.groupby(['report_date', 'm_anntime']).first().reset_index()
+                        
+                        # 清洗1: 同一 report_date 保留最早 m_anntime（防未来函数）
                         combined_df = combined_df.sort_values(['report_date', 'm_anntime'])
+                        combined_df = combined_df.drop_duplicates(subset=['report_date'], keep='first')
                         
-                        # 2. 核心：在同一报告期内 ffill（例如快报数据补充到正式报）
-                        # 修正：使用 group_keys=False 避免 report_date 变成 index 丢失
-                        combined_df = combined_df.groupby('report_date', group_keys=False).apply(lambda x: x.ffill())
+                        # 清洗2: 同一 m_anntime 保留最大 report_date（处理同天多报告）
+                        combined_df = combined_df.sort_values(['m_anntime', 'report_date'])
+                        combined_df = combined_df.drop_duplicates(subset=['m_anntime'], keep='last')
                         
-                        # 3. 保存为 Parquet
+                        # 最终排序并保存
+                        combined_df = combined_df.sort_values(['report_date', 'm_anntime'])
                         save_file = os.path.join(self.fin_path, f"{stock}.parquet")
                         combined_df.to_parquet(save_file)
                         
                 except Exception as e:
-                    print(f"❌ 股票 {stock} 处理失败: {e}")
+                    print(f"[失败] 股票 {stock} 处理失败: {e}")
                     continue
 
-        print(f"✅ 全市场财务数据分批同步完成。")
+        print(f"[完成] 全市场财务数据分批同步完成。")
     def get_all_industry_map(self):
         """构建股票->行业映射 - 申万一级"""
         all_sectors = xtdata.get_sector_list()
@@ -134,7 +139,7 @@ class DataEngine:
         # 逻辑：以 SW1 开头，且名字里不包含“加权”或“等权”
         sw_l1_sectors = [s for s in all_sectors if s.startswith('SW1') 
                          and '加权' not in s and '等权' not in s]
-        print(f"🔎 发现 {len(sw_l1_sectors)} 个有效的申万一级行业索引")
+        print(f"[发现] 发现 {len(sw_l1_sectors)} 个有效的申万一级行业索引")
         
         industry_mapping = []
         for sector in tqdm(sw_l1_sectors, desc="抓取行业成员"):
@@ -179,4 +184,4 @@ class DataEngine:
         df_industry = self.get_all_industry_map()
         df_industry.to_csv(os.path.join(self.root_path, 'industry_map.csv'), index=False)
         
-        print("🎉 元数据搬运完成！")
+        print("[完成] 元数据搬运完成！")

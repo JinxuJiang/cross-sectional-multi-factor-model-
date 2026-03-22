@@ -129,60 +129,37 @@ class PITAligner:
             
         注意：
         -----
-        对于同一个 m_anntime（公告日）出现多个 report_date（报告期）的情况，
-        只保留 report_date 最大的那条记录，确保 PIT 对齐时使用最新的财务数据。
+        数据层已做两步清洗，这里只需对齐到交易日历。
         """
         if not financial_records:
-            # 如果没有财务记录，返回全 NaN
             return [(d,) + tuple([np.nan] * len(value_fields)) for d in self.trading_calendar]
         
-        # 1. 解析日期并去重
-        # 关键逻辑：同一 m_anntime 保留 report_date 最大的记录
-        temp_records = {}  # {ann_date: (report_date, record)}
-        
+        # 解析并排序记录（数据层已清洗，无需去重）
+        valid_records = []
         for record in financial_records:
             ann_date = self._parse_date(record.get(date_field))
-            report_date = self._parse_date(record.get('report_date', ''))
-            
-            if ann_date is None:
-                continue
-                
-            # 如果该公告日已存在，比较 report_date，保留更大的
-            if ann_date in temp_records:
-                existing_report_date, _ = temp_records[ann_date]
-                # report_date 为 None 时，使用一个极早的日期比较
-                if report_date is not None:
-                    if existing_report_date is None or report_date > existing_report_date:
-                        temp_records[ann_date] = (report_date, record)
-                # 如果新记录的 report_date 为 None 且已有记录也为 None，保留原有记录
-            else:
-                temp_records[ann_date] = (report_date, record)
-        
-        # 转换为列表并按公告日期排序
-        valid_records = [(ann_date, record) for ann_date, (_, record) in temp_records.items()]
-        valid_records.sort(key=lambda x: x[0])
+            if ann_date:
+                valid_records.append((ann_date, record))
         
         if not valid_records:
             return [(d,) + tuple([np.nan] * len(value_fields)) for d in self.trading_calendar]
         
-        # 2. 构建映射：每个交易日对应哪个财报数据
-        # 策略：对于每个交易日，找到最新的已公告财报
+        valid_records.sort(key=lambda x: x[0])
+        
+        # 对齐到交易日历
         result = []
         record_idx = 0
         current_record = valid_records[0]
         
         for trade_date in self.trading_calendar:
-            # 如果当前交易日已经超过了下一条记录的公告日期，则更新
             while (record_idx + 1 < len(valid_records) and 
                    trade_date >= valid_records[record_idx + 1][0]):
                 record_idx += 1
                 current_record = valid_records[record_idx]
             
-            # 如果第一条记录的公告日期晚于当前交易日，则无有效数据
             if trade_date < current_record[0] and record_idx == 0:
                 values = [np.nan] * len(value_fields)
             else:
-                # 提取需要的字段值
                 record = current_record[1]
                 values = []
                 for field in value_fields:

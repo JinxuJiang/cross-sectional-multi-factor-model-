@@ -13,8 +13,7 @@
    - 原因: 前复权价格会随时间漂移，需要定期修正
    
 2. 财务数据: 智能合并（保留历史 + 更新重叠部分）
-   - 保留: report_date < '20230101' 的历史数据
-   - 更新: report_date >= '20230101' 的重叠部分
+   - 保留: 删除完全一样的数据
    - 新增: 最新下载的数据
    
 3. 元数据: 重新下载（股票列表、行业映射）
@@ -105,23 +104,33 @@ class MonthlyDataUpdater(DataEngine):
                     if new_df is None:
                         continue
                     
-                    # 3. 智能合并
+                    # 3. 智能合并 + 两步清洗
                     save_file = os.path.join(self.fin_path, f"{stock}.parquet")
                     if os.path.exists(save_file):
                         # 读取现有数据
                         old_df = pd.read_parquet(save_file)
-                        # 合并并去重
+                        # 合并
                         combined = pd.concat([old_df, new_df], ignore_index=True)
-                        combined = combined.drop_duplicates(
-                            subset=['report_date', 'm_anntime'], 
-                            keep='last'
-                        )
-                        # 排序
-                        combined = combined.sort_values(['report_date', 'm_anntime'])
                     else:
                         combined = new_df
                     
-                    # 4. 保存
+                    # 4. 两步清洗（V2）- 必须重新执行完整清洗
+                    if combined is not None and not combined.empty:
+                        # 步骤0: 合并同一(report_date, m_anntime)
+                        combined = combined.groupby(['report_date', 'm_anntime']).first().reset_index()
+                        
+                        # 清洗1: 同一 report_date 保留最早 m_anntime
+                        combined = combined.sort_values(['report_date', 'm_anntime'])
+                        combined = combined.drop_duplicates(subset=['report_date'], keep='first')
+                        
+                        # 清洗2: 同一 m_anntime 保留最大 report_date
+                        combined = combined.sort_values(['m_anntime', 'report_date'])
+                        combined = combined.drop_duplicates(subset=['m_anntime'], keep='last')
+                        
+                        # 最终排序并保存
+                        combined = combined.sort_values(['report_date', 'm_anntime'])
+                    
+                    # 5. 保存
                     combined.to_parquet(save_file)
                     
                 except Exception as e:
@@ -174,11 +183,20 @@ class MonthlyDataUpdater(DataEngine):
                     suffixes=('', f'_{table_name}')
                 )
         
-        if combined_df is not None:
-            # 行压缩与向后填充
+        if combined_df is not None and not combined_df.empty:
+            # 两步清洗（V2）
+            # 步骤0: 合并同一(report_date, m_anntime)
             combined_df = combined_df.groupby(['report_date', 'm_anntime']).first().reset_index()
+            
+            # 清洗1: 同一 report_date 保留最早 m_anntime
             combined_df = combined_df.sort_values(['report_date', 'm_anntime'])
-            combined_df = combined_df.groupby('report_date', group_keys=False).apply(lambda x: x.ffill())
+            combined_df = combined_df.drop_duplicates(subset=['report_date'], keep='first')
+            
+            # 清洗2: 同一 m_anntime 保留最大 report_date
+            combined_df = combined_df.sort_values(['m_anntime', 'report_date'])
+            combined_df = combined_df.drop_duplicates(subset=['m_anntime'], keep='last')
+            
+            combined_df = combined_df.sort_values(['report_date', 'm_anntime'])
         
         return combined_df
     
