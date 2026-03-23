@@ -1,11 +1,14 @@
 import os        
 import pandas as pd 
+from pathlib import Path
 from xtquant import xtdata
 from tqdm import tqdm
 
 class DataEngine:
-    def __init__(self, data_path=r'C:\Users\蒋大王\Desktop\量化\截面多因子模型\01数据\data\raw_data'):
-        self.root_path = data_path
+    def __init__(self, data_path=None):
+        if data_path is None:
+            data_path = Path(__file__).parent / 'data' / 'raw_data'
+        self.root_path = Path(data_path)
         self.price_path = os.path.join(data_path, 'market_data')
         self.fin_path = os.path.join(data_path, 'financial_data')
         

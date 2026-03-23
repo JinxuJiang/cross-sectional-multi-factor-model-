@@ -63,8 +63,6 @@ class MonthlyDataUpdater(DataEngine):
     """月度数据更新器 - 继承自基础数据引擎"""
     
     def __init__(self, data_path=None):
-        if data_path is None:
-            data_path = r'C:\Users\蒋大王\Desktop\量化\截面多因子模型\01数据\data\raw_data'
         super().__init__(data_path)
         self.log_file = os.path.join(self.root_path, 'update_log.json')
         
