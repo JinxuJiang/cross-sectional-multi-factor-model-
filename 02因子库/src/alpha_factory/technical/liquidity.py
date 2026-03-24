@@ -89,11 +89,10 @@ class LiquidityFactors:
     
     def factor_pv_corr20(self, save=True):
         """
-        量价相关性因子 (20日)
+        量价相关性因子 (20日) - NumPy向量化实现
         
         公式: corr(ret1, volume, 20)
         逻辑: 过去20日收益率与成交量的相关系数
-        无未来函数: 滚动窗口计算，每天只用过去20天数据
         """
         print("计算因子: pv_corr20 (20日量价相关性)")
         dates, stocks, close = self._to_numpy('close')
@@ -105,21 +104,54 @@ class LiquidityFactors:
         mask = pre_close > 0
         ret1[mask] = close[mask] / pre_close[mask] - 1
         
-        # 滚动20日相关性
-        period = 20
-        n_dates, n_stocks = close.shape
-        result = np.full_like(close, np.nan)
+        # NumPy向量化滚动相关系数计算
+        window = 20
+        min_periods = 10
+        n_dates, n_stocks = ret1.shape
+        result = np.full_like(ret1, np.nan)
         
-        for i in range(period - 1, n_dates):
-            ret_window = ret1[i - period + 1:i + 1, :]
-            vol_window = volume[i - period + 1:i + 1, :]
+        # 预计算滚动窗口的统计量（向量化）
+        for i in range(window - 1, n_dates):
+            # 获取窗口数据 (window, n_stocks)
+            ret_window = ret1[i - window + 1:i + 1, :]
+            vol_window = volume[i - window + 1:i + 1, :]
             
-            for j in range(n_stocks):
-                r = ret_window[:, j]
-                v = vol_window[:, j]
-                valid = ~np.isnan(r) & ~np.isnan(v) & (v > 0)
-                if np.sum(valid) >= 10:  # 至少10个有效值
-                    result[i, j] = np.corrcoef(r[valid], v[valid])[0, 1]
+            # 计算每只股票的有效数据数（非NaN）
+            ret_valid = np.sum(~np.isnan(ret_window), axis=0)
+            vol_valid = np.sum(~np.isnan(vol_window), axis=0)
+            valid_mask = (ret_valid >= min_periods) & (vol_valid >= min_periods)
+            
+            if not np.any(valid_mask):
+                continue
+            
+            # 只对有足够数据的股票计算（向量化）
+            ret_valid_window = ret_window[:, valid_mask]
+            vol_valid_window = vol_window[:, valid_mask]
+            
+            # 计算均值（忽略NaN）
+            ret_mean = np.nanmean(ret_valid_window, axis=0)
+            vol_mean = np.nanmean(vol_valid_window, axis=0)
+            
+            # 中心化
+            ret_centered = ret_valid_window - ret_mean
+            vol_centered = vol_valid_window - vol_mean
+            
+            # 将NaN设为0以便计算（不影响结果因为对应位置会被mask）
+            ret_centered = np.where(np.isnan(ret_centered), 0, ret_centered)
+            vol_centered = np.where(np.isnan(vol_centered), 0, vol_centered)
+            
+            # 计算协方差和方差
+            cov = np.sum(ret_centered * vol_centered, axis=0)
+            ret_var = np.sum(ret_centered ** 2, axis=0)
+            vol_var = np.sum(vol_centered ** 2, axis=0)
+            
+            # 相关系数
+            denom = np.sqrt(ret_var * vol_var)
+            nonzero_mask = denom > 1e-10
+            
+            valid_stocks = np.where(valid_mask)[0]
+            valid_nonzero = valid_stocks[nonzero_mask]
+            result[i, valid_nonzero] = cov[nonzero_mask] / denom[nonzero_mask]
         
         print(f"非NaN比例: {np.sum(~np.isnan(result)) / result.size:.2%}")
         if save:
@@ -149,6 +181,10 @@ class LiquidityFactors:
             
             short_mean = np.nanmean(short_vol, axis=0)
             long_mean = np.nanmean(long_vol, axis=0)
+            
+            # 处理全NaN情况（避免警告）
+            short_mean = np.where(np.all(np.isnan(short_vol), axis=0), np.nan, short_mean)
+            long_mean = np.where(np.all(np.isnan(long_vol), axis=0), np.nan, long_mean)
             
             valid = long_mean > 0
             result[i, valid] = short_mean[valid] / long_mean[valid]
@@ -180,6 +216,9 @@ class LiquidityFactors:
         for i in range(period - 1, n_dates):
             window = amount[i - period + 1:i + 1, :]
             mean_val = np.nanmean(window, axis=0)
+            
+            # 处理全NaN情况
+            mean_val = np.where(np.all(np.isnan(window), axis=0), np.nan, mean_val)
             
             valid = mean_val > 0
             result[i, valid] = amount[i, valid] / mean_val[valid]

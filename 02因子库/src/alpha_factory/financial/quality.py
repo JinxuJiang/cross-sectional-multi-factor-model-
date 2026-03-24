@@ -63,7 +63,9 @@ class QualityFactors:
         self._total_current_assets = None
         self._oper_profit_ttm = None
         self._net_profit_ttm = None
-    
+        self._close = None
+        self._operating_cash_flow_ttm = None  # 新增
+                                    
     def _load_revenue_ttm(self):
         """加载营业收入_TTM"""
         if self._revenue_ttm is None:
@@ -135,6 +137,30 @@ class QualityFactors:
             self._net_profit_ttm = table.to_pandas()
             print(f"  净利润TTM: {self._net_profit_ttm.shape}")
         return self._net_profit_ttm
+    
+    def _load_close(self):
+        """加载收盘价（用于计算现金流收益率）"""
+        if self._close is None:
+            file_path = self.processed_data_path / "market_data" / "close.parquet"
+            if not file_path.exists():
+                raise FileNotFoundError(f"收盘价数据不存在: {file_path}")
+            
+            table = pq.read_table(file_path)
+            self._close = table.to_pandas()
+            print(f"  收盘价: {self._close.shape}")
+        return self._close
+    
+    def _load_operating_cash_flow_ttm(self):
+        """加载经营现金流_TTM（新增）"""
+        if self._operating_cash_flow_ttm is None:
+            file_path = self.processed_data_path / "financial_data" / "operating_cash_flow_ttm.parquet"
+            if not file_path.exists():
+                raise FileNotFoundError(f"经营现金流TTM数据不存在: {file_path}")
+            
+            table = pq.read_table(file_path)
+            self._operating_cash_flow_ttm = table.to_pandas()
+            print(f"  经营现金流TTM: {self._operating_cash_flow_ttm.shape}")
+        return self._operating_cash_flow_ttm
     
     def _prepare_index(self, df: pd.DataFrame) -> pd.DataFrame:
         """将time列设为索引"""
@@ -400,6 +426,88 @@ class QualityFactors:
         
         return ratio
     
+    def factor_accrual(self, save: bool = True) -> pd.DataFrame:
+        """
+        Accrual (应计利润比) = (净利润_TTM - 经营现金流_TTM) / 总资产
+        
+        因果逻辑：高应计意味着利润质量差，Sloan (1996) 发现高应计股票未来收益更低
+        """
+        print("\n计算因子: accrual (应计利润比)")
+        
+        net_profit = self._load_net_profit_ttm()
+        ocf = self._load_operating_cash_flow_ttm()
+        tot_assets = self._load_tot_assets()
+        
+        net_profit, ocf, tot_assets = self._align_dataframes(net_profit, ocf, tot_assets)
+        
+        accrual = (net_profit - ocf) / tot_assets
+        accrual[(accrual > 1) | (accrual < -1)] = np.nan
+        
+        print(f"  非空值比例: {accrual.notna().sum().sum() / (accrual.shape[0] * accrual.shape[1]) * 100:.2f}%")
+        
+        if save:
+            output_file = self.output_path / "accrual.parquet"
+            accrual.reset_index().to_parquet(output_file, index=False)
+            print(f"  已保存: {output_file}")
+        
+        return accrual
+    
+    def factor_cashflow_to_profit(self, save: bool = True) -> pd.DataFrame:
+        """
+        现金流利润比 = 经营现金流_TTM / 净利润_TTM
+        
+        因果逻辑：衡量利润含金量，>1说明现金流好于利润（预收款多）
+        """
+        print("\n计算因子: cashflow_to_profit (现金流利润比)")
+        
+        ocf = self._load_operating_cash_flow_ttm()
+        net_profit = self._load_net_profit_ttm()
+        
+        ocf, net_profit = self._align_dataframes(ocf, net_profit)
+        
+        net_profit_safe = net_profit.copy()
+        net_profit_safe[net_profit_safe == 0] = np.nan
+        
+        ratio = ocf / net_profit_safe
+        ratio[(ratio > 10) | (ratio < -10)] = np.nan
+        
+        print(f"  非空值比例: {ratio.notna().sum().sum() / (ratio.shape[0] * ratio.shape[1]) * 100:.2f}%")
+        
+        if save:
+            output_file = self.output_path / "cashflow_to_profit.parquet"
+            ratio.reset_index().to_parquet(output_file, index=False)
+            print(f"  已保存: {output_file}")
+        
+        return ratio
+    
+    def factor_ocf_to_revenue(self, save: bool = True) -> pd.DataFrame:
+        """
+        收现率 = 经营现金流_TTM / 营收_TTM
+        
+        因果逻辑：反映收入质量，高收现率代表议价能力强
+        """
+        print("\n计算因子: ocf_to_revenue (收现率)")
+        
+        ocf = self._load_operating_cash_flow_ttm()
+        revenue = self._load_revenue_ttm()
+        
+        ocf, revenue = self._align_dataframes(ocf, revenue)
+        
+        revenue_safe = revenue.copy()
+        revenue_safe[revenue_safe <= 0] = np.nan
+        
+        ratio = ocf / revenue_safe
+        ratio[(ratio > 5) | (ratio < -2)] = np.nan
+        
+        print(f"  非空值比例: {ratio.notna().sum().sum() / (ratio.shape[0] * ratio.shape[1]) * 100:.2f}%")
+        
+        if save:
+            output_file = self.output_path / "ocf_to_revenue.parquet"
+            ratio.reset_index().to_parquet(output_file, index=False)
+            print(f"  已保存: {output_file}")
+        
+        return ratio
+    
     def compute_all(self, factors: Optional[List[str]] = None):
         """
         批量计算所有质量因子
@@ -417,7 +525,10 @@ class QualityFactors:
             'asset_turnover': self.factor_asset_turnover,
             'financial_leverage': self.factor_financial_leverage,
             'profit_quality': self.factor_profit_quality,
-            'current_asset_ratio': self.factor_current_asset_ratio, 
+            'current_asset_ratio': self.factor_current_asset_ratio,
+            'accrual': self.factor_accrual,
+            'cashflow_to_profit': self.factor_cashflow_to_profit,
+            'ocf_to_revenue': self.factor_ocf_to_revenue,
         }
         
         if factors is None:

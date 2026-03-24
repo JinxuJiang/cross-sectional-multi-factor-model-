@@ -79,6 +79,23 @@ class FinancialDataLoader:
         ('net_profit', True, 'net_profit_excl_min_int_inc'),  # 归母净利润
         ('revenue', True, 'revenue'),
         ('oper_profit', True, 'oper_profit'),
+        
+        # PershareIndex 每股指标 - 直接PIT对齐（QMT原始字段名）
+        # 注意：以下字段来自QMT的PershareIndex表，使用实际字段名
+        # [2026-03-24] 删除冗余字段：s_fa_ocfps, s_fa_bps, s_fa_eps_basic, s_fa_eps_diluted,
+        # s_fa_undistributedps, net_profit_margin, inventory_turnover, du_return_on_equity,
+        # equity_roe, net_roe, total_roe, actual_tax_rate, gear_ratio
+        ('sales_gross_profit', False, 'sales_gross_profit'),    # 销售毛利率(对应gross_margin)
+        
+        # 新增基础数据字段（用于扩充因子库）
+        # 资产负债表
+        ('tot_liab', False, 'tot_liab'),                          # 总负债
+        ('total_current_liability', False, 'total_current_liability'),  # 流动负债
+        ('cash_equivalents', False, 'cash_equivalents'),          # 货币资金
+        
+        # 现金流量表（TTM）
+        ('operating_cash_flow', True, 'net_cash_flows_oper_act'), # 经营现金流
+        ('capex', True, 'cash_pay_acq_const_fiolta'),             # 购建固定资产现金
     ]
     
     def __init__(

@@ -55,7 +55,8 @@ class ProfitabilityFactors:
         self._net_assets = None
         self._tot_assets = None
         self._oper_profit_ttm = None
-    
+        self._sales_gross_profit = None  # 新增：销售毛利率
+                    
     def _load_net_profit_ttm(self):
         """加载净利润_TTM（归母净利润）"""
         if self._net_profit_ttm is None:
@@ -103,6 +104,18 @@ class ProfitabilityFactors:
             self._oper_profit_ttm = table.to_pandas()
             print(f"  营业利润TTM: {self._oper_profit_ttm.shape}")
         return self._oper_profit_ttm
+    
+    def _load_sales_gross_profit(self):
+        """加载销售毛利率（来自PershareIndex，百分比形式）"""
+        if self._sales_gross_profit is None:
+            file_path = self.processed_data_path / "financial_data" / "sales_gross_profit.parquet"
+            if not file_path.exists():
+                raise FileNotFoundError(f"销售毛利率数据不存在: {file_path}")
+            
+            table = pq.read_table(file_path)
+            self._sales_gross_profit = table.to_pandas()
+            print(f"  销售毛利率: {self._sales_gross_profit.shape}")
+        return self._sales_gross_profit
     
     def _prepare_index(self, df: pd.DataFrame) -> pd.DataFrame:
         """将time列设为索引"""
@@ -352,6 +365,35 @@ class ProfitabilityFactors:
         
         return opm
     
+    def factor_gross_margin(self, save: bool = True) -> pd.DataFrame:
+        """
+        毛利率 (Gross Margin)
+        
+        直接使用 PershareIndex 的 sales_gross_profit
+        数据是百分比形式（如36.72表示36.72%）
+        
+        银行股此字段可能为NaN，这是正常的
+        """
+        print("\n计算因子: gross_margin (毛利率)")
+        
+        gross_margin = self._load_sales_gross_profit()
+        gross_margin = self._prepare_index(gross_margin)
+        
+        # 极端值处理：毛利率通常在-20%到100%之间
+        gross_margin[(gross_margin > 100) | (gross_margin < -20)] = np.nan
+        
+        print(f"  非空值比例: {gross_margin.notna().sum().sum() / (gross_margin.shape[0] * gross_margin.shape[1]) * 100:.2f}%")
+        
+        sample_mean = gross_margin.mean().mean()
+        print(f"  样本均值: {sample_mean:.2f}%")
+        
+        if save:
+            output_file = self.output_path / "gross_margin.parquet"
+            gross_margin.reset_index().to_parquet(output_file, index=False)
+            print(f"  已保存: {output_file}")
+        
+        return gross_margin
+    
     def compute_all(self, factors: Optional[List[str]] = None):
         """
         批量计算所有盈利因子
@@ -370,6 +412,7 @@ class ProfitabilityFactors:
             'roa': self.factor_roa,
             'roe_growth': self.factor_roe_growth,
             'opm': self.factor_opm,
+            'gross_margin': self.factor_gross_margin,
         }
         
         if factors is None:

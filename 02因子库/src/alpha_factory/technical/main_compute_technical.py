@@ -63,6 +63,10 @@ TECHNICAL_FACTORS = {
     
     # 价格-成交量家族
     'close_position': {'family': 'price_volume', 'method': 'factor_close_position', 'desc': '收盘价位置(日内)'},
+    'intraday_return_ma5': {'family': 'price_volume', 'method': 'factor_intraday_return_ma5', 'desc': '日内收益率5日均'},
+    'intraday_return_ma20': {'family': 'price_volume', 'method': 'factor_intraday_return_ma20', 'desc': '日内收益率20日均'},
+    'close_position_ma5': {'family': 'price_volume', 'method': 'factor_close_position_ma5', 'desc': '收盘价位置5日均'},
+    'close_position_ma20': {'family': 'price_volume', 'method': 'factor_close_position_ma20', 'desc': '收盘价位置20日均'},
     'skew20': {'family': 'price_volume', 'method': 'factor_skew20', 'desc': '20日收益偏度'},
     'kurt20': {'family': 'price_volume', 'method': 'factor_kurt20', 'desc': '20日收益峰度'},
 }
@@ -176,7 +180,7 @@ def compute_single_factor(factor_name: str, factor_info: dict,
     # 根据家族选择计算器
     if factor_info['family'] == 'momentum':
         calculator = momentum
-        dates, stocks, _ = momentum._get_numpy_matrix()
+        dates, stocks, _ = momentum._to_numpy('close')
         output_path = momentum.output_path
     elif factor_info['family'] == 'volatility':
         calculator = volatility
@@ -184,11 +188,11 @@ def compute_single_factor(factor_name: str, factor_info: dict,
         output_path = volatility.output_path
     elif factor_info['family'] == 'liquidity':
         calculator = liquidity
-        dates, stocks, _ = liquidity._get_numpy_matrix('close')
+        dates, stocks, _ = liquidity._to_numpy('close')
         output_path = liquidity.output_path
     else:  # price_volume
         calculator = price_volume
-        dates, stocks, _ = price_volume._get_numpy_matrix('close')
+        dates, stocks, _ = price_volume._to_numpy('close')
         output_path = price_volume.output_path
     
     # 调用计算方法

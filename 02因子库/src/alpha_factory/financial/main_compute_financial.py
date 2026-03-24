@@ -38,6 +38,9 @@ from valuation import ValuationFactors
 from profitability import ProfitabilityFactors
 from growth import GrowthFactors
 from quality import QualityFactors
+from safety import SafetyFactors
+from investment import InvestmentFactors
+from efficiency import EfficiencyFactors
 from processors.pipeline import clean_factor_wide
 
 
@@ -49,23 +52,38 @@ FINANCIAL_FACTORS = {
     'ps': {'family': 'valuation', 'method': 'factor_ps', 'desc': '市销率'},
     'ey': {'family': 'valuation', 'method': 'factor_ey', 'desc': '盈利收益率'},
     
-    # 盈利家族
+    # 盈利家族 (4个原有 + 1个新增)
     'roe': {'family': 'profitability', 'method': 'factor_roe', 'desc': '净资产收益率'},
     'roa': {'family': 'profitability', 'method': 'factor_roa', 'desc': '总资产收益率'},
     'roe_growth': {'family': 'profitability', 'method': 'factor_roe_growth', 'desc': 'ROE同比增长'},
     'opm': {'family': 'profitability', 'method': 'factor_opm', 'desc': '营业利润率'},
+    'gross_margin': {'family': 'profitability', 'method': 'factor_gross_margin', 'desc': '毛利率'},
     
     # 成长家族
     'profit_growth': {'family': 'growth', 'method': 'factor_profit_growth', 'desc': '净利润增长率'},
     'revenue_growth': {'family': 'growth', 'method': 'factor_revenue_growth', 'desc': '营收增长率'},
     'oper_profit_growth': {'family': 'growth', 'method': 'factor_oper_profit_growth', 'desc': '营业利润增长率'},
     
-    # 质量家族
-    'asset_turnover': {'family': 'quality', 'method': 'factor_asset_turnover', 'desc': '资产周转率'},
+    # 质量家族 (3个原有 + 3个新增)
     'financial_leverage': {'family': 'quality', 'method': 'factor_financial_leverage', 'desc': '财务杠杆'},
     'profit_quality': {'family': 'quality', 'method': 'factor_profit_quality', 'desc': '利润质量'},
     'current_asset_ratio': {'family': 'quality', 'method': 'factor_current_asset_ratio', 'desc': '流动资产占比'},
-    'current_ratio': {'family': 'quality', 'method': 'factor_current_ratio', 'desc': '流动比率'},
+    'accrual': {'family': 'quality', 'method': 'factor_accrual', 'desc': '应计利润比'},
+    'cashflow_to_profit': {'family': 'quality', 'method': 'factor_cashflow_to_profit', 'desc': '现金流利润比'},
+    'ocf_to_revenue': {'family': 'quality', 'method': 'factor_ocf_to_revenue', 'desc': '收现率'},
+    
+    # 安全家族 (新建3个)
+    'debt_to_equity': {'family': 'safety', 'method': 'factor_debt_to_equity', 'desc': '产权比率'},
+    'current_ratio': {'family': 'safety', 'method': 'factor_current_ratio', 'desc': '流动比率'},
+    'cash_ratio': {'family': 'safety', 'method': 'factor_cash_ratio', 'desc': '现金比率'},
+    
+    # 投资家族 (新建2个)
+    'asset_growth': {'family': 'investment', 'method': 'factor_asset_growth', 'desc': '总资产增长率'},
+    'capex_to_assets': {'family': 'investment', 'method': 'factor_capex_to_assets', 'desc': '资本支出强度'},
+    
+    # 效率家族 (新建2个)
+    'asset_turnover': {'family': 'efficiency', 'method': 'factor_asset_turnover', 'desc': '资产周转率'},
+    'working_capital_ratio': {'family': 'efficiency', 'method': 'factor_working_capital_ratio', 'desc': '营运资本占比'},
 }
 
 
@@ -149,6 +167,8 @@ def clean_financial_factor(factor_name: str, factor_df: pd.DataFrame, processed_
 def compute_single_factor(factor_name: str, factor_info: dict,
                           valuation: ValuationFactors, profitability: ProfitabilityFactors,
                           growth: GrowthFactors, quality: QualityFactors,
+                          safety: SafetyFactors, investment: InvestmentFactors,
+                          efficiency: EfficiencyFactors,
                           skip_clean: bool = False) -> Path:
     """
     计算单个财务因子
@@ -163,6 +183,12 @@ def compute_single_factor(factor_name: str, factor_info: dict,
         估值因子计算器
     profitability : ProfitabilityFactors
         盈利因子计算器
+    safety : SafetyFactors
+        安全因子计算器
+    investment : InvestmentFactors
+        投资因子计算器
+    efficiency : EfficiencyFactors
+        效率因子计算器
     skip_clean : bool
         是否跳过清洗
         
@@ -181,8 +207,16 @@ def compute_single_factor(factor_name: str, factor_info: dict,
         calculator = profitability
     elif factor_info['family'] == 'growth':
         calculator = growth
-    else:  # quality
+    elif factor_info['family'] == 'quality':
         calculator = quality
+    elif factor_info['family'] == 'safety':
+        calculator = safety
+    elif factor_info['family'] == 'investment':
+        calculator = investment
+    elif factor_info['family'] == 'efficiency':
+        calculator = efficiency
+    else:
+        raise ValueError(f"未知家族: {factor_info['family']}")
     
     # 调用计算方法
     method = getattr(calculator, factor_info['method'])
@@ -249,7 +283,7 @@ def main():
     
     parser.add_argument(
         '--family',
-        choices=['valuation', 'profitability', 'growth', 'quality', 'all'],
+        choices=['valuation', 'profitability', 'growth', 'quality', 'safety', 'investment', 'efficiency', 'all'],
         default='all',
         help='指定因子家族，默认 all'
     )
@@ -301,6 +335,21 @@ def main():
             if info['family'] == 'quality':
                 print(f"  - {name:15s}: {info['desc']}")
         
+        print("\n【安全家族 (safety)】")
+        for name, info in FINANCIAL_FACTORS.items():
+            if info['family'] == 'safety':
+                print(f"  - {name:15s}: {info['desc']}")
+        
+        print("\n【投资家族 (investment)】")
+        for name, info in FINANCIAL_FACTORS.items():
+            if info['family'] == 'investment':
+                print(f"  - {name:15s}: {info['desc']}")
+        
+        print("\n【效率家族 (efficiency)】")
+        for name, info in FINANCIAL_FACTORS.items():
+            if info['family'] == 'efficiency':
+                print(f"  - {name:15s}: {info['desc']}")
+        
         print("\n【使用示例】")
         print("  python main_compute_financial.py --family valuation")
         print("  python main_compute_financial.py --factors pe pb roe")
@@ -342,6 +391,9 @@ def main():
     profitability = None
     growth = None
     quality = None
+    safety = None
+    investment = None
+    efficiency = None
     
     if 'valuation' in families_needed:
         print("\n【初始化】估值因子计算器...")
@@ -359,6 +411,18 @@ def main():
         print("\n【初始化】质量因子计算器...")
         quality = QualityFactors()
     
+    if 'safety' in families_needed:
+        print("\n【初始化】安全因子计算器...")
+        safety = SafetyFactors()
+    
+    if 'investment' in families_needed:
+        print("\n【初始化】投资因子计算器...")
+        investment = InvestmentFactors()
+    
+    if 'efficiency' in families_needed:
+        print("\n【初始化】效率因子计算器...")
+        efficiency = EfficiencyFactors()
+    
     # 计算所有因子
     output_files = []
     
@@ -367,6 +431,7 @@ def main():
             output_file = compute_single_factor(
                 factor_name, factor_info,
                 valuation, profitability, growth, quality,
+                safety, investment, efficiency,
                 skip_clean=args.skip_clean
             )
             output_files.append(output_file)
