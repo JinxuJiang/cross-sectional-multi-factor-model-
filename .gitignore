@@ -21,6 +21,10 @@ backtest_results/
 03模型训练层/experiments/
 04回测层/reports/
 
+# 例外：允许展示用图片
+!assets/**/*.png
+!assets/**/*.jpg
+
 # Python
 __pycache__/
 *.pyc
