@@ -265,7 +265,7 @@ class DataConstructorV1:
                     continue
                 entry_date = all_dates[entry_idx]
                 
-                # 持有N天后，T+21日开盘卖出
+                # 持有N天后，T+(N+1)日开盘卖出
                 exit_idx = entry_idx + self.label_horizon  # T+21日
                 if exit_idx >= len(all_dates):
                     continue
@@ -273,7 +273,7 @@ class DataConstructorV1:
                 
                 # 使用开盘价计算收益
                 entry_price = open_df.loc[entry_date]  # T+1开盘价（买入价）
-                exit_price = open_df.loc[exit_date]    # T+21开盘价（卖出价）
+                exit_price = open_df.loc[exit_date]    # T+(N+1)开盘价（卖出价）
                 
             else:
                 # 旧版逻辑：使用收盘价（有执行时点偏差）

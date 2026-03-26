@@ -94,7 +94,7 @@ class WalkForwardSplitterV1:
         self.step = self._parse_window(step)
         
         # 解析gap（默认等于label_horizon + 1）
-        # 原因：使用T+1开盘买入、T+21开盘卖出时，标签用到T+21的数据
+        # 原因：使用T+1开盘买入、T+(label_horizon+1)开盘卖出时，标签用到T+(label_horizon+1)的数据
         # 所以需要gap >= label_horizon + 1才能确保不泄露
         # gap_train_valid: 训练集和验证集之间的gap（交易日数量）
         self.gap_train_valid = gap_train_valid if gap_train_valid is not None else (label_horizon + 1)
@@ -159,7 +159,7 @@ class WalkForwardSplitterV1:
         预计算所有Fold的切分（带双重Gap版本）
         
         修复：使用交易日索引计算gap，确保标签计算不越界
-        注意：使用T+1开盘买入、T+21开盘卖出时，gap = label_horizon + 1
+        注意：使用T+1开盘买入、T+(label_horizon+1)开盘卖出时，gap = label_horizon + 1
         
         返回：
         ------
@@ -298,7 +298,7 @@ class WalkForwardSplitterV1:
         print()
         print("Gap配置 (防止数据泄露):")
         print(f"  label_horizon: {self.label_horizon}天")
-        print(f"  训练-验证gap: {self.gap_train_valid}个交易日 (使用T+1开盘买入、T+21开盘卖出，需要gap >= label_horizon + 1)")
+        print(f"  训练-验证gap: {self.gap_train_valid}个交易日 (使用T+1开盘买入、T+{self.label_horizon+1}开盘卖出，需要gap >= label_horizon + 1)")
         print(f"  验证-测试gap: {self.gap_valid_test}个交易日")
         print()
         

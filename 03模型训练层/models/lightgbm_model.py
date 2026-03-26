@@ -170,18 +170,17 @@ class LightGBMModel(BaseModel):
         importance = self.model.feature_importance(importance_type='gain')
         split_count = self.model.feature_importance(importance_type='split')
         
-        # 构建Series
-        importance_series = pd.Series(
-            importance,
-            index=self.feature_names,
-            name='importance'
-        ).sort_values(ascending=False)
-        
-        # 添加分裂次数
+        # 构建DataFrame
         importance_df = pd.DataFrame({
             'importance': importance,
             'split': split_count
         }, index=self.feature_names)
+        
+        # 按重要性排序（降序）
+        importance_df = importance_df.sort_values(
+            by='importance', 
+            ascending=False
+        )
         
         return importance_df
 

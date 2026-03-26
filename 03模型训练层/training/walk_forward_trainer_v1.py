@@ -138,7 +138,7 @@ class WalkForwardTrainerV1:
         label_horizon = label_config.get('horizon', 20)
         
         # 获取gap配置（可选，默认等于label_horizon + 1）
-        # 原因：使用T+1开盘买入、T+21开盘卖出时，标签用到T+21的数据
+        # 原因：使用T+1开盘买入、T+(label_horizon+1)开盘卖出时，标签用到T+(label_horizon+1)的数据
         # 所以需要gap >= label_horizon + 1才能确保不泄露
         default_gap = label_horizon + 1
         gap_train_valid = wf_config.get('gap_train_valid', default_gap)
@@ -208,7 +208,8 @@ class WalkForwardTrainerV1:
         X_train, y_train = self.data_constructor.build(train_dates)
         logger.info(f"训练集: {len(X_train)} 个样本")
         if self.config['data']['label'].get('use_open_price', True):
-            logger.info("标签计算：T+1开盘买入，T+21开盘卖出（真实交易时点）")
+            horizon = self.config['data']['label']['horizon']
+            logger.info(f"标签计算：T+1开盘买入，T+{horizon+1}开盘卖出（真实交易时点）")
         
         logger.info("构造验证数据...")
         X_valid, y_valid = self.data_constructor.build(valid_dates)

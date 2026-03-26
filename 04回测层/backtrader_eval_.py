@@ -57,7 +57,7 @@ from io import BytesIO
 
 def get_paths(exp_id):
     """根据exp_id生成数据路径"""
-    base_path = r'C:\Users\蒋大王\Desktop\量化\截面多因子模型'
+    base_path = Path(__file__).parent.parent
     return {
         'open': os.path.join(base_path, '02因子库', 'processed_data', 'market_data', 'open.parquet'),
         'close': os.path.join(base_path, '02因子库', 'processed_data', 'market_data', 'close.parquet'),

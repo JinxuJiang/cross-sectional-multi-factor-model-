@@ -8,7 +8,7 @@
     2. 使用 DataConstructorV1：使用真实交易时点价格计算标签
 
 使用方法：
-    cd C:/Users/蒋大王/Desktop/量化/截面多因子模型
+    cd <项目根目录>
     conda activate AKTool
     python 03模型训练层/main_train_v1.py
     python 03模型训练层/main_train_v1.py --config configs/fined_lgbm_config.yaml --exp-id test_001_fined --start-date 2020-01-01 -y  
@@ -228,7 +228,7 @@ def get_default_config() -> dict:
             'valid_window': '6M',
             'test_window': '3M',
             'step': '3M',
-            'gap_train_valid': 21,  # V1新增：训练-验证gap（默认label_horizon + 1，使用T+1开盘买入、T+21开盘卖出）
+            'gap_train_valid': 21,  # V1新增：训练-验证gap（默认label_horizon + 1，使用T+1开盘买入、T+(horizon+1)开盘卖出）
             'gap_valid_test': 21,   # V1新增：验证-测试gap（默认label_horizon + 1）
             # 'start_date': '2015-01-01',  # 可选：训练开始日期
             # 'end_date': '2024-12-31',    # 可选：训练结束日期
@@ -341,7 +341,8 @@ def print_config_summary(config: dict):
     print(f"  预测周期: {label_config['horizon']}天")
     print(f"  使用开盘价: {label_config.get('use_open_price', True)}")
     if label_config.get('use_open_price', True):
-        print("  标签计算: T+1开盘买入 → T+21开盘卖出（真实交易时点）")
+        horizon = label_config['horizon']
+        print(f"  标签计算: T+1开盘买入 → T+{horizon+1}开盘卖出（真实交易时点）")
     else:
         print("  标签计算: T日收盘买入 → T+20日收盘卖出（传统方法）")
     
