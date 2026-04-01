@@ -11,7 +11,7 @@
     cd <项目根目录>
     conda activate AKTool
     python 03模型训练层/main_train_v1.py
-    python 03模型训练层/main_train_v1.py --config configs/horizon20_config.yaml --exp-id test_001_fined --start-date 2020-01-01 -y  
+    python 03模型训练层/main_train_v1.py --config configs/horizon20_config.yaml --exp-id exp_20d_001_v1 --start-date 2020-01-01 -y  
 
 命令行参数：
     --exp-id, -e        指定实验ID（如：test_001）

@@ -52,13 +52,13 @@ model:
     n_estimators: 1000           # 足够树数量
     
     # === 随机抽样 ===
-    feature_fraction: 0.7        # 列采样
+    feature_fraction: 0.5        # 列采样
     bagging_fraction: 0.8        # 行采样
     bagging_freq: 5              # 每5轮采样
     
     # === 正则化 ===
-    lambda_l1: 0.1               # L1正则
-    lambda_l2: 0.1               # L2正则
+    lambda_l1: 1.0               # L1正则
+    lambda_l2: 3.0               # L2正则
     
     verbose: -1
     num_threads: 8
