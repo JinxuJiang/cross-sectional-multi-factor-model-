@@ -13,11 +13,16 @@ data:
   
   # 使用的行情字段（只用close计算未来收益）
   price_column: "close"
+  open_column: "open"  # V1新增：开盘价字段
+  
+  # ST状态数据路径（新增）
+  st_status_path: "01数据/data/raw_data/st_status.parquet"
   
   # 预测目标配置
   label:
     horizon: 20  # 预测未来20日收益率
-    formula: "forward_return"  # close[t+20]/close[t] - 1
+    formula: "forward_return"
+    use_open_price: true  # V1新增：使用开盘价计算标签
 
 # ==================== Walk-forward 配置 ====================
 walk_forward:
@@ -31,11 +36,12 @@ walk_forward:
   end_date: null            # 训练结束日期（null表示到最新数据）
 
 # ==================== LightGBM 模型配置 ====================
+# 注：使用 Huber 损失替代 MSE，对异常值更鲁棒，防止过拟合极端收益
 model:
   name: "fined_lightgbm"
   params:
-    objective: "regression"      # 保持回归，直接拟合收益率
-    metric: "mse"                # 或者改用 'huber'，对异常值更鲁棒
+    objective: "huber"           # Huber损失：对异常值鲁棒（替代 regression/mse）
+    metric: "huber"
     boosting_type: "gbdt"
     
     # === 关键修正：加大模型容量 ===

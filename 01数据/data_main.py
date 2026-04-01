@@ -24,6 +24,10 @@ def full_download(engine, market_end_date=''):
     print("\n📊 下载财务数据...")
     engine.download_financial_data(stocks)
     
+    # 下载ST数据
+    print("\n🚨 下载ST状态数据...")
+    engine.download_st_data(stocks)
+    
     # 下载元数据
     print("\n📁 下载元数据...")
     engine.download_metadata()

@@ -74,6 +74,10 @@ class DataConstructorV1:
         else:
             logger.info("DataConstructorV1: 使用收盘价计算标签（兼容旧版本）")
         
+        # ST状态数据路径（新增）
+        self.st_status_path = config['data'].get('st_status_path', None)
+        self._st_status_df: Optional[pd.DataFrame] = None
+        
         # 缓存（惰性加载）
         self._factor_files: Optional[Dict[str, List[Path]]] = None
         self._close_df: Optional[pd.DataFrame] = None
@@ -184,6 +188,33 @@ class DataConstructorV1:
         logger.info(f"开盘价数据: {df.shape[0]} 天 x {df.shape[1]} 只股票")
         
         return self._open_df
+    
+    def _load_st_status(self) -> Optional[pd.DataFrame]:
+        """
+        加载ST状态数据（新增）
+        
+        返回：
+        ------
+        pd.DataFrame : index=date, columns=stock_codes, values=0/1/2
+        """
+        if self._st_status_df is not None:
+            return self._st_status_df
+        if self.st_status_path is None:
+            return None
+        
+        path = Path(self.st_status_path)
+        if not path.exists():
+            logger.warning(f"ST状态文件不存在: {path}，跳过ST过滤")
+            return None
+        
+        logger.info(f"加载ST状态数据: {path}")
+        df = pq.read_table(path).to_pandas()
+        if 'time' in df.columns:
+            df = df.set_index('time')
+        df.index = pd.to_datetime(df.index)
+        self._st_status_df = df
+        logger.info(f"ST状态数据: {df.shape[0]} 天 x {df.shape[1]} 只股票")
+        return df
     
     def _load_factor_data(self, factor_name: str, dates: List[pd.Timestamp]) -> pd.DataFrame:
         """
@@ -322,6 +353,17 @@ class DataConstructorV1:
             return None
         
         listed_stocks = close_df.loc[date].dropna().index.tolist()
+        
+        # 新增：过滤ST/*ST股票
+        st_status = self._load_st_status()
+        if st_status is not None and date in st_status.index:
+            normal_mask = st_status.loc[date] == 0
+            normal_stocks = set(normal_mask[normal_mask].index.tolist())
+            before_count = len(listed_stocks)
+            listed_stocks = [s for s in listed_stocks if s in normal_stocks]
+            st_filtered = before_count - len(listed_stocks)
+            if st_filtered > 0:
+                logger.debug(f"{date.strftime('%Y-%m-%d')}: 过滤 {st_filtered} 只ST/*ST股票")
         
         if len(listed_stocks) == 0:
             return None
@@ -536,6 +578,7 @@ if __name__ == "__main__":
                 'market_data_path': '02因子库/processed_data/market_data',
                 'price_column': 'close',
                 'open_column': 'open',
+                'st_status_path': '01数据/data/raw_data/st_status.parquet',
                 'label': {
                     'horizon': 20,
                     'use_open_price': True  # V1新增

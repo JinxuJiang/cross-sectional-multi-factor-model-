@@ -20,6 +20,9 @@ data:
   price_column: "close"
   open_column: "open"
   
+  # ST状态数据路径（新增）
+  st_status_path: "01数据/data/raw_data/st_status.parquet"
+  
   # 预测目标配置
   label:
     horizon: 20  # 预测未来20日收益率

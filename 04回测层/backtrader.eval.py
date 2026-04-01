@@ -34,6 +34,7 @@ import argparse
 from pathlib import Path
 import base64
 from io import BytesIO
+from functools import lru_cache
 
 
 # ==========================================
@@ -65,6 +66,18 @@ DEFAULT_PATHS = {
     'low': PROJECT_ROOT / '02因子库' / 'processed_data' / 'market_data' / 'low.parquet',
     'volume': PROJECT_ROOT / '02因子库' / 'processed_data' / 'market_data' / 'volume.parquet',
 }
+
+# ST状态数据路径
+ST_STATUS_PATH = PROJECT_ROOT / '01数据' / 'data' / 'raw_data' / 'st_status.parquet'
+
+
+@lru_cache(maxsize=1)
+def load_st_status():
+    """加载ST状态数据（带缓存）"""
+    if not ST_STATUS_PATH.exists():
+        print(f"  警告: 找不到ST状态文件: {ST_STATUS_PATH}")
+        return None
+    return pd.read_parquet(ST_STATUS_PATH)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='多因子回测脚本')
@@ -187,7 +200,7 @@ def generate_signals(df, top_n, start_date, end_date):
                 rebalance_dates.append(date)
                 current_month = date.month
     
-    print(f"\n--- 步骤2: 生成调仓信号（每月首个交易日） ---")
+    print(f"\n--- 步骤2: 生成调仓信号（每月首个交易日，已加入ST过滤） ---")
     print(f"回测范围内总交易日: {len(trading_days)}, 计划调仓次数: {len(rebalance_dates)}")
     if rebalance_dates:
         print(f"首个调仓日: {rebalance_dates[0].strftime('%Y-%m-%d')}")
@@ -217,46 +230,68 @@ def generate_signals(df, top_n, start_date, end_date):
         if current_slice.empty:
             continue
         
-        # 2. 获取T+1日数据，过滤开盘涨停的
-        future_dates = df_period[df_period.index > date].index.unique()
-        if len(future_dates) == 0:
-            continue  # 没有T+1数据，跳过
-        next_date = future_dates[0]
-        
-        try:
-            # 获取T+1的数据
-            next_day_df = df_period.loc[next_date]
-            if isinstance(next_day_df, pd.Series):
-                next_day_df = next_day_df.to_frame().T
-            
-            # 合并T日和T+1日的数据（按stock_code）
-            merged = current_slice[['stock_code', 'close']].merge(
-                next_day_df[['stock_code', 'open']], 
-                on='stock_code', 
-                suffixes=('_t', '_t1')
-            )
-            
-            if len(merged) > 0:
-                # 计算开盘涨幅
-                merged['open_return'] = merged['open_t1'] / merged['close_t'] - 1
-                
-                # 过滤开盘涨停（>=9.9%）的
-                tradable_stocks = merged.loc[merged['open_return'] < 0.099, 'stock_code']
-                tradable = current_slice[current_slice['stock_code'].isin(tradable_stocks)]
-                
-                filtered_count = len(merged) - len(tradable_stocks)
-                if filtered_count > 0:
-                    print(f"  {date_str}: 过滤 {filtered_count} 只开盘涨停股")
+        # 2. 过滤ST/*ST股票
+        st_status = load_st_status()
+        if st_status is not None:
+            date_key = pd.Timestamp(date.date())
+            if date_key in st_status.index:
+                normal_stocks = st_status.loc[date_key][st_status.loc[date_key] == 0].index.tolist()
+                before_count = len(current_slice)
+                current_slice = current_slice[current_slice['stock_code'].isin(normal_stocks)]
+                st_filtered = before_count - len(current_slice)
+                if st_filtered > 0:
+                    print(f"  {date_str}: 过滤 {st_filtered} 只ST/*ST股票")
             else:
-                tradable = current_slice
-        except:
-            # 如果出错，就不过滤
+                print(f"  {date_str}: 警告-ST数据中找不到该日期，跳过ST过滤")
+        
+        if current_slice.empty:
+            continue
+        
+        # 3. 获取T+1日数据，过滤开盘涨停的
+        future_dates = df_period[df_period.index > date].index.unique()
+        
+        if len(future_dates) == 0:
+            # 没有T+1数据（最后一天/最新数据），直接按T日选股结果下单，不过滤
+            print(f"  {date_str}: 警告-无T+1数据，不进行开盘涨停过滤，直接按选股结果下单")
             tradable = current_slice
+        else:
+            next_date = future_dates[0]
+            
+            try:
+                # 获取T+1的数据
+                next_day_df = df_period.loc[next_date]
+                if isinstance(next_day_df, pd.Series):
+                    next_day_df = next_day_df.to_frame().T
+                
+                # 合并T日和T+1日的数据（按stock_code）
+                # 先重命名列避免冲突
+                current_renamed = current_slice[['stock_code', 'close']].rename(columns={'close': 'close_t'})
+                next_renamed = next_day_df[['stock_code', 'open']].rename(columns={'open': 'open_t1'})
+                
+                merged = current_renamed.merge(next_renamed, on='stock_code')
+                
+                if len(merged) > 0:
+                    # 计算开盘涨幅
+                    merged['open_return'] = merged['open_t1'] / merged['close_t'] - 1
+                    
+                    # 过滤开盘涨停（>=9.9%）的
+                    tradable_stocks = merged.loc[merged['open_return'] < 0.099, 'stock_code']
+                    tradable = current_slice[current_slice['stock_code'].isin(tradable_stocks)]
+                    
+                    filtered_count = len(merged) - len(tradable_stocks)
+                    if filtered_count > 0:
+                        print(f"  {date_str}: 过滤 {filtered_count} 只开盘涨停股")
+                else:
+                    tradable = current_slice
+            except Exception as e:
+                # 如果出错，就不过滤
+                print(f"  {date_str}: 获取T+1数据出错: {e}")
+                tradable = current_slice
             
         if tradable.empty:
             continue
             
-        # 3. 在可操作股票中选top N
+        # 4. 在可操作股票中选top N
         selected = tradable.sort_values(by='prediction', ascending=False).head(top_n)
         buy_list = selected['stock_code'].tolist()
         buy_list_set = set(buy_list)

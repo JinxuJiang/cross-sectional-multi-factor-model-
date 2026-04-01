@@ -27,6 +27,10 @@ import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 import gc
+from functools import lru_cache
+
+# ST状态数据路径
+ST_STATUS_PATH = Path(__file__).parent.parent / '01数据' / 'data' / 'raw_data' / 'st_status.parquet'
 
 
 def get_project_root():
@@ -105,9 +109,18 @@ def load_predictions_and_market_data(exp_id: str):
     return main_df
 
 
+@lru_cache(maxsize=1)
+def load_st_status():
+    """加载ST状态数据（带缓存）"""
+    if not ST_STATUS_PATH.exists():
+        print(f"  警告: 找不到ST状态文件: {ST_STATUS_PATH}")
+        return None
+    return pd.read_parquet(ST_STATUS_PATH)
+
+
 def filter_main_board_and_limit_up(df: pd.DataFrame, target_date: datetime, df_full: pd.DataFrame):
     """
-    筛选主板股票并过滤开盘涨停股（与 backtrader.eval_1.1.py 逻辑一致）
+    筛选主板股票并过滤ST股票、开盘涨停股（与 backtrader.eval_1.1.py 逻辑一致）
     
     Args:
         df: 目标日期的预测数据
@@ -123,7 +136,22 @@ def filter_main_board_and_limit_up(df: pd.DataFrame, target_date: datetime, df_f
     if df.empty:
         return df
     
-    # 2. 获取T+1日数据，过滤开盘涨停的
+    # 2. 过滤ST股票（状态值>0表示ST或*ST）
+    st_status = load_st_status()
+    if st_status is not None:
+        date_key = pd.Timestamp(target_date.date())
+        if date_key in st_status.index:
+            # 获取当日状态为0（正常）的股票
+            normal_stocks = st_status.loc[date_key][st_status.loc[date_key] == 0].index.tolist()
+            before_count = len(df)
+            df = df[df['stock_code'].isin(normal_stocks)]
+            st_filtered = before_count - len(df)
+            if st_filtered > 0:
+                print(f"  过滤 {st_filtered} 只ST/*ST股票")
+        else:
+            print(f"  警告: ST数据中找不到日期 {target_date.strftime('%Y-%m-%d')}，跳过ST过滤")
+    
+    # 3. 获取T+1日数据，过滤开盘涨停的
     future_dates = df_full[df_full.index > target_date].index.unique()
     if len(future_dates) == 0:
         # 没有T+1数据，不过滤涨停
@@ -197,14 +225,14 @@ def generate_live_signals(main_df: pd.DataFrame, target_date: datetime, top_n: i
     if isinstance(target_df, pd.Series):
         target_df = target_df.to_frame().T
     
-    print(f"\n--- 步骤2: 筛选主板股票并过滤涨停 ---")
+    print(f"\n--- 步骤2: 筛选主板股票、过滤ST、过滤涨停 ---")
     print(f"目标日期: {target_date.strftime('%Y-%m-%d')}")
     print(f"原始股票数: {len(target_df)}")
     
-    # 应用主板+涨停过滤
+    # 应用主板+ST+涨停过滤
     tradable = filter_main_board_and_limit_up(target_df, target_date, main_df)
     
-    print(f"主板可交易股票数: {len(tradable)}")
+    print(f"最终可交易股票数: {len(tradable)}")
     
     if tradable.empty:
         raise ValueError("没有符合条件的可交易股票")
@@ -265,9 +293,10 @@ def print_signals_table(signals_df: pd.DataFrame, signal_date: datetime, total_c
     print("-"*80)
     print(f"\n选股逻辑说明:")
     print(f"  1. 只保留主板股票 (60/00开头)")
-    print(f"  2. 过滤T+1开盘涨停股 (涨幅>=9.9%)")
-    print(f"  3. 按预测分数排序选Top {len(signals_df)}")
-    print(f"  4. 等权分配90%仓位")
+    print(f"  2. 过滤ST/*ST股票")
+    print(f"  3. 过滤T+1开盘涨停股 (涨幅>=9.9%)")
+    print(f"  4. 按预测分数排序选Top {len(signals_df)}")
+    print(f"  5. 等权分配90%仓位")
     print(f"\n提示:")
     print(f"  - 此信号基于 {signal_date.strftime('%Y-%m-%d')} 的模型预测")
     print(f"  - 建议在下个交易日开盘后按目标金额买入")

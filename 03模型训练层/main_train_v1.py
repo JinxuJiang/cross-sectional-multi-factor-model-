@@ -11,11 +11,11 @@
     cd <项目根目录>
     conda activate AKTool
     python 03模型训练层/main_train_v1.py
-    python 03模型训练层/main_train_v1.py --config configs/fined_lgbm_config.yaml --exp-id test_001_fined --start-date 2020-01-01 -y  
+    python 03模型训练层/main_train_v1.py --config configs/horizon20_config.yaml --exp-id test_001_fined --start-date 2020-01-01 -y  
 
 命令行参数：
     --exp-id, -e        指定实验ID（如：test_001）
-    --config, -c        指定配置文件路径(注意！--config configs/fined_lgbm_config.yaml)
+    --config, -c        指定配置文件路径(注意！--config configs/horizon20_config.yaml)
     --start-date        训练开始日期（YYYY-MM-DD）
     --end-date          训练结束日期（YYYY-MM-DD）
     --gap               Gap大小（天，默认等于horizon）
@@ -186,7 +186,7 @@ def load_config(config_path: Path) -> dict:
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        print(f"✓ 配置文件加载成功: {config_path}")
+        print(f"[OK] 配置文件加载成功: {config_path}")
         return config
     else:
         # 尝试在 configs/ 目录下查找同名文件
@@ -197,10 +197,10 @@ def load_config(config_path: Path) -> dict:
         if fallback_path.exists():
             with open(fallback_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-            print(f"✓ 配置文件加载成功: {fallback_path}")
+            print(f"[OK] 配置文件加载成功: {fallback_path}")
             return config
         else:
-            print(f"⚠ 配置文件不存在: {config_path}")
+            print(f"[WARN] 配置文件不存在: {config_path}")
             print("使用默认配置...")
             return get_default_config()
 
@@ -218,6 +218,7 @@ def get_default_config() -> dict:
             'market_data_path': '02因子库/processed_data/market_data',
             'price_column': 'close',
             'open_column': 'open',  # V1新增：开盘价字段
+            'st_status_path': '01数据/data/raw_data/st_status.parquet',  # 新增：ST状态数据
             'label': {
                 'horizon': 20,
                 'use_open_price': True  # V1新增：使用开盘价计算标签
@@ -280,9 +281,9 @@ def check_data_files(config: dict) -> bool:
     market_data_path = Path(config['data']['market_data_path'])
     close_file = market_data_path / f"{config['data']['price_column']}.parquet"
     if close_file.exists():
-        print(f"✓ 收盘价数据: {close_file}")
+        print(f"[OK] 收盘价数据: {close_file}")
     else:
-        print(f"✗ 收盘价数据不存在: {close_file}")
+        print(f"[FAIL] 收盘价数据不存在: {close_file}")
         all_ok = False
     
     # 2. 检查开盘价数据（V1版本需要）
@@ -291,10 +292,20 @@ def check_data_files(config: dict) -> bool:
         open_column = config['data'].get('open_column', 'open')
         open_file = market_data_path / f"{open_column}.parquet"
         if open_file.exists():
-            print(f"✓ 开盘价数据: {open_file}")
+            print(f"[OK] 开盘价数据: {open_file}")
         else:
-            print(f"⚠ 开盘价数据不存在: {open_file}")
+            print(f"[WARN] 开盘价数据不存在: {open_file}")
             print("  将使用收盘价替代（标签计算可能不够精确）")
+    
+    # 3. 检查ST状态数据（新增）
+    st_path = config['data'].get('st_status_path', None)
+    if st_path:
+        st_file = Path(st_path)
+        if st_file.exists():
+            print(f"[OK] ST状态数据: {st_file}")
+        else:
+            print(f"[WARN] ST状态数据不存在: {st_file}")
+            print("  将跳过ST过滤（训练数据会包含ST股票）")
     
     # 3. 检查因子数据目录
     tech_path = Path(config['data']['factor_paths']['technical'])
@@ -302,16 +313,16 @@ def check_data_files(config: dict) -> bool:
     
     if tech_path.exists():
         tech_files = list(tech_path.glob('*.parquet'))
-        print(f"✓ 技术因子目录: {tech_path} ({len(tech_files)}个文件)")
+        print(f"[OK] 技术因子目录: {tech_path} ({len(tech_files)}个文件)")
     else:
-        print(f"✗ 技术因子目录不存在: {tech_path}")
+        print(f"[FAIL] 技术因子目录不存在: {tech_path}")
         all_ok = False
     
     if fin_path.exists():
         fin_files = list(fin_path.glob('*.parquet'))
-        print(f"✓ 财务因子目录: {fin_path} ({len(fin_files)}个文件)")
+        print(f"[OK] 财务因子目录: {fin_path} ({len(fin_files)}个文件)")
     else:
-        print(f"✗ 财务因子目录不存在: {fin_path}")
+        print(f"[FAIL] 财务因子目录不存在: {fin_path}")
         all_ok = False
     
     print("="*60)
@@ -334,6 +345,14 @@ def print_config_summary(config: dict):
     print(f"  行情数据: {config['data']['market_data_path']}")
     print(f"  收盘价列: {config['data']['price_column']}")
     print(f"  开盘价列: {config['data'].get('open_column', 'open')}")
+    
+    # ST过滤状态（新增）
+    st_path = config['data'].get('st_status_path', None)
+    if st_path and Path(st_path).exists():
+        print(f"  ST状态数据: {st_path}")
+        print(f"  ST过滤: [OK] 已启用（训练时排除ST/*ST股票）")
+    else:
+        print(f"  ST过滤: [WARN] 未启用（未找到ST状态数据）")
     
     # 标签配置（V1重点）
     print("\n【标签配置】V1修复版")
@@ -456,6 +475,14 @@ def main():
         config['data']['open_column'] = 'open'
         print("  补充默认配置: open_column = 'open'")
     
+    # 补充默认配置（如果配置文件缺少某些字段）
+    if 'open_column' not in config['data']:
+        config['data']['open_column'] = 'open'
+        print("  补充默认配置: open_column = 'open'")
+    if 'st_status_path' not in config['data']:
+        config['data']['st_status_path'] = '01数据/data/raw_data/st_status.parquet'
+        print("  补充默认配置: st_status_path = '01数据/data/raw_data/st_status.parquet'")
+    
     # 根据命令行参数更新配置
     print("\n" + "-"*60)
     print("应用命令行参数覆盖...")
@@ -464,7 +491,7 @@ def main():
     
     # 检查数据文件
     if not check_data_files(config):
-        print("\n✗ 数据文件检查失败，请确保：")
+        print("\n[FAIL] 数据文件检查失败，请确保：")
         print("  1. 行情数据已下载（close.parquet）")
         print("  2. 因子数据已计算（technical_factors/和financial_factors/）")
         print("  3. 配置文件路径正确")
@@ -505,8 +532,8 @@ def main():
         trainer.run()
         
         print("\n" + "="*80)
-        print("✓ 训练完成！")
-        print(f"✓ 实验目录: {trainer.exp_dir}")
+        print("[OK] 训练完成！")
+        print(f"[OK] 实验目录: {trainer.exp_dir}")
         print("\n输出文件：")
         print(f"  - 预测结果: {trainer.exp_dir / config['output']['predictions_filename']}")
         print(f"  - 汇总报告: {trainer.exp_dir / 'summary.parquet'}")
@@ -580,7 +607,7 @@ def main():
         print("\n\n训练被用户中断")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\n✗ 训练失败: {e}")
+        print(f"\n\n[FAIL] 训练失败: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

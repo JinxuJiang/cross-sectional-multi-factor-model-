@@ -1,8 +1,10 @@
 import os        
 import pandas as pd 
+import numpy as np
 from pathlib import Path
 from xtquant import xtdata
 from tqdm import tqdm
+from datetime import datetime
 
 class DataEngine:
     def __init__(self, data_path=None):
@@ -14,6 +16,9 @@ class DataEngine:
         
         os.makedirs(self.price_path, exist_ok=True)
         os.makedirs(self.fin_path, exist_ok=True)
+        
+        # ST数据输出路径
+        self.st_file = self.root_path / 'st_status.parquet'
 
     def download_market_data(self, stock_list, start_time='20100101', end_time=''):
         """下载行情数据并保存 (强制前复权)
@@ -44,6 +49,68 @@ class DataEngine:
                 if not df.empty:
                     df.to_parquet(os.path.join(self.price_path, f"{stock}.parquet"))
 
+    def download_st_data(self, stock_list=None):
+        """
+        下载ST/*ST状态数据并保存为宽表
+        
+        参数:
+        -----
+        stock_list : list, optional
+            股票列表，默认下载全市场沪深A股
+        """
+        if stock_list is None:
+            stock_list = xtdata.get_stock_list_in_sector('沪深A股')
+        
+        print(f"下载ST数据，共 {len(stock_list)} 只股票...")
+        
+        # 获取交易日历（从已有数据或生成）
+        suspend_file = Path(self.price_path).parent.parent / '02因子库' / 'processed_data' / 'market_data' / 'suspendFlag.parquet'
+        if suspend_file.exists():
+            dates = pd.read_parquet(suspend_file, columns=['time'])['time']
+            trading_dates = pd.to_datetime(dates).unique()
+        else:
+            trading_dates = pd.date_range(start='2010-01-01', end='2030-12-31', freq='B')
+        
+        # 下载ST基础数据
+        xtdata.download_his_st_data()
+        
+        # 构建宽表
+        all_status = {}
+        today = datetime.now().strftime('%Y%m%d')
+        
+        for stock in tqdm(stock_list, desc="处理ST数据"):
+            try:
+                st_data = xtdata.get_his_st_data(stock) or {}
+                status = pd.Series(0, index=trading_dates, dtype=np.int8)
+                
+                # ST = 1
+                for start, end in st_data.get('ST', []):
+                    end_dt = pd.to_datetime(today) if end == '20380119' else pd.to_datetime(end)
+                    mask = (status.index >= pd.to_datetime(start)) & (status.index <= end_dt)
+                    status.loc[mask] = 1
+                
+                # *ST = 2 (覆盖ST)
+                for start, end in st_data.get('*ST', []):
+                    end_dt = pd.to_datetime(today) if end == '20380119' else pd.to_datetime(end)
+                    mask = (status.index >= pd.to_datetime(start)) & (status.index <= end_dt)
+                    status.loc[mask] = 2
+                
+                all_status[stock] = status
+            except:
+                all_status[stock] = pd.Series(0, index=trading_dates, dtype=np.int8)
+        
+        # 保存
+        st_df = pd.DataFrame(all_status)
+        st_df.index.name = 'time'
+        st_df.to_parquet(self.st_file, compression='zstd')
+        
+        # 统计
+        total = st_df.shape[0] * st_df.shape[1]
+        st_cnt = (st_df == 1).sum().sum()
+        star_cnt = (st_df == 2).sum().sum()
+        print(f"ST数据已保存: {self.st_file}")
+        print(f"  形状: {st_df.shape}, ST: {st_cnt} ({st_cnt/total*100:.2f}%), *ST: {star_cnt} ({star_cnt/total*100:.2f}%)")
+    
     def download_financial_data(self, stock_list, start_time='20100101', end_time=''):
         """
         下载财务数据：分批机制 + 自动重试 + PIT 缝合

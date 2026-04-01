@@ -246,13 +246,19 @@ class MonthlyDataUpdater(DataEngine):
         print("=" * 60)
         self.download_financial_data_with_merge(stocks, start_time=financial_start)
         
-        # 3. 元数据 - 重新下载
+        # 3. ST数据 - 重新下载
         print("\n" + "=" * 60)
-        print("📁 步骤3: 更新元数据")
+        print("🚨 步骤3: 更新ST状态数据")
+        print("=" * 60)
+        self.download_st_data(stocks)
+        
+        # 4. 元数据 - 重新下载
+        print("\n" + "=" * 60)
+        print("📁 步骤4: 更新元数据")
         print("=" * 60)
         self.download_metadata()
         
-        # 4. 记录更新日志
+        # 5. 记录更新日志
         self._save_update_log()
         
         print("\n" + "=" * 60)

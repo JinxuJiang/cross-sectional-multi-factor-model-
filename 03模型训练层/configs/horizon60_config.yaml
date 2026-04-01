@@ -9,6 +9,7 @@ data:
   market_data_path: "02因子库/processed_data/market_data"
   price_column: "close"
   open_column: "open"  # V1新增：开盘价字段
+  st_status_path: "01数据/data/raw_data/st_status.parquet"  # 新增：ST状态数据
   
   label:
     horizon: 60  # 预测未来60日收益率
@@ -31,14 +32,14 @@ walk_forward:
 
 # ==================== LightGBM 60日模型配置 ====================
 # 针对长期预测的特性：
-# - 长期预测信号更平滑，使用标准回归
+# - 长期预测信号更平滑，使用 Huber 损失对异常值鲁棒
 # - 适中学习率 + 适度深度的树
 # - 长期预测需要更大的模型容量来捕捉趋势
 model:
   name: "lightgbm"
   params:
-    objective: "regression"      # 标准回归（长期预测使用）
-    metric: "mse"
+    objective: "huber"           # Huber损失：对异常值鲁棒（替代 regression/mse）
+    metric: "huber"
     boosting_type: "gbdt"
     
     # === 树的生长控制 ===

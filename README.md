@@ -97,7 +97,6 @@ cd quant-factor-model
 
 # 创建虚拟环境
 conda create -n quant python=3.9
-conda activate quant
 
 # 安装依赖
 pip install -r requirements.txt
