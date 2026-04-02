@@ -43,7 +43,7 @@ from functools import lru_cache
 STRATEGY_PARAMS = {
     'stocks_per_batch': 20,           # 每次选股数量
     'start_date': datetime(2020, 1, 1),  # 回测开始日期
-    'end_date': datetime(2026, 3, 31),   # 回测结束日期
+    'end_date': datetime(2026, 4, 30),   # 回测结束日期
     'initial_cash': 50000,           # 初始资金
     'commission': 0.002               # 手续费率 (0.2%)
 }
@@ -177,6 +177,12 @@ def load_and_merge_data(paths):
 def generate_signals(df, top_n, start_date, end_date):
     """
     生成调仓信号（每月第一个交易日调仓）
+    
+    返回:
+        buy_dict: 买入信号字典 {date: [stock_list]}
+        sell_dict: 卖出信号字典 {date: [stock_list]}
+        all_held_stocks: 所有持有过的股票列表
+        rebalance_records: 详细的调仓记录列表（用于导出CSV）
     """
     mask = (df.index >= pd.to_datetime(start_date) - pd.Timedelta(days=5)) & \
            (df.index <= pd.to_datetime(end_date) + pd.Timedelta(days=5))
@@ -186,6 +192,7 @@ def generate_signals(df, top_n, start_date, end_date):
     sell_dict = {}
     current_position = set()
     all_held_stocks = set()
+    rebalance_records = []  # 新增：记录详细信号
     
     trading_days = sorted(df_period.index.unique())
     if not trading_days:
@@ -247,7 +254,21 @@ def generate_signals(df, top_n, start_date, end_date):
         if current_slice.empty:
             continue
         
-        # 3. 获取T+1日数据，过滤开盘涨停的
+        # 3. 【新增】过滤数据不足20天的股票（与run_backtest一致）
+        start_date_ts = pd.to_datetime(start_date)
+        hist_data = df_period[df_period.index >= start_date_ts]
+        stock_data_counts = hist_data.groupby('stock_code', observed=True).size()
+        valid_stocks_20d = stock_data_counts[stock_data_counts >= 20].index.tolist()
+        before_count = len(current_slice)
+        current_slice = current_slice[current_slice['stock_code'].isin(valid_stocks_20d)]
+        data_filtered = before_count - len(current_slice)
+        if data_filtered > 0:
+            print(f"  {date_str}: 过滤 {data_filtered} 只数据不足20天股票")
+        
+        if current_slice.empty:
+            continue
+        
+        # 4. 获取T+1日数据，过滤开盘涨停的
         future_dates = df_period[df_period.index > date].index.unique()
         
         if len(future_dates) == 0:
@@ -298,12 +319,36 @@ def generate_signals(df, top_n, start_date, end_date):
         
         sell_list = sorted(list(current_position - buy_list_set))
         
+        # 新增：记录详细的买入信号
+        for rank, (_, row) in enumerate(selected.iterrows(), 1):
+            rebalance_records.append({
+                'date': date_str,
+                'action': 'BUY',
+                'stock_code': row['stock_code'],
+                'pred_score': row['prediction'],
+                'rank': rank,
+                'close_t': row['close'],
+                'notes': ''
+            })
+        
+        # 新增：记录详细的卖出信号
+        for stock in sell_list:
+            rebalance_records.append({
+                'date': date_str,
+                'action': 'SELL',
+                'stock_code': stock,
+                'pred_score': None,
+                'rank': None,
+                'close_t': None,
+                'notes': '调出持仓'
+            })
+        
         buy_dict[date_str] = buy_list
         sell_dict[date_str] = sell_list
         current_position = buy_list_set
         all_held_stocks.update(current_position)
         
-    return buy_dict, sell_dict, sorted(list(all_held_stocks))
+    return buy_dict, sell_dict, sorted(list(all_held_stocks)), rebalance_records
 
 # ==========================================
 # 4. Backtrader 策略类
@@ -313,7 +358,7 @@ class MyMultiFactorStrategy(bt.Strategy):
         ('buy_date', None), 
         ('sell_date', None), 
         ('trades', None),
-        ('stop_loss', 0.15),      # 止损比例：15%
+        ('stop_loss', 0.2),      # 止损比例：0.15（15%）
     )
 
     def __init__(self):
@@ -692,14 +737,24 @@ if __name__ == "__main__":
     print(f"\n[诊断] 主表日期范围: {master_df.index.min()} ~ {master_df.index.max()}")
 
     # 生成信号（每月第一个交易日调仓）
-    buy_date, sell_date, stock_list = generate_signals(
+    buy_date, sell_date, stock_list, rebalance_records = generate_signals(
         master_df,
         STRATEGY_PARAMS['stocks_per_batch'],
         STRATEGY_PARAMS['start_date'],
         STRATEGY_PARAMS['end_date']
     )
     
-    print(f"涉及股票总数: {len(stock_list)}")
+    # 新增：保存调仓信号到CSV
+    if rebalance_records:
+        signals_df = pd.DataFrame(rebalance_records)
+        signals_path = output_dir / 'rebalance_signals.csv'
+        signals_df.to_csv(signals_path, index=False, encoding='utf-8-sig')
+        print(f"\n调仓信号已导出: {signals_path}")
+        print(f"  总记录数: {len(signals_df)} 条")
+        print(f"  买入记录: {len(signals_df[signals_df['action']=='BUY'])} 条")
+        print(f"  卖出记录: {len(signals_df[signals_df['action']=='SELL'])} 条")
+    
+    print(f"\n涉及股票总数: {len(stock_list)}")
     
     if not buy_date:
         print("错误：没有生成任何调仓信号！")

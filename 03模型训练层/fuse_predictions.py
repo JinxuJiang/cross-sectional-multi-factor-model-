@@ -6,7 +6,7 @@
 
 使用方法:
     python fuse_predictions.py --exps test_001_hor5_v1 test_001_fined_20_v1 --base-idx 1 --output-exp ensemble_5d_20d_v1
-    python fuse_predictions.py --exps test_001_hor5_v1 test_001_fined_20_v1 test_001_hor60_v1 --base-idx 1 --output-exp ensemble_5d_20d_60d_v1
+    python fuse_predictions.py --exps exp_5d_001_v1 exp_20d_001_v1 exp_60d_001_v1 --base-idx 1 --output-exp ensemble_5d_20d_60d_v1   
 
 参数说明:
     --exps:      输入模型实验ID列表（按顺序排列，索引从0开始）

@@ -307,7 +307,7 @@ def print_signals_table(signals_df: pd.DataFrame, signal_date: datetime, total_c
 def main():
     parser = argparse.ArgumentParser(description='生成实时交易信号（与回测逻辑一致）')
     parser.add_argument('--exp-id', type=str, required=True, help='实验ID，如 exp_001')
-    parser.add_argument('--top-n', type=int, default=30, help='选股数量，默认30只（与回测一致）')
+    parser.add_argument('--top-n', type=int, default=20, help='选股数量，默认30只（与回测一致）')
     parser.add_argument('--total-cash', type=float, default=100000, help='总资金，默认100000')
     parser.add_argument('--date', type=str, default=None, help='指定预测日期(如 2026-03-10)，默认使用最新日期')
     parser.add_argument('--output-dir', type=str, default=None, help='输出目录，默认 04回测层/reports/{exp_id}')

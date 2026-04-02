@@ -47,17 +47,17 @@ model:
     # === 关键修正：加大模型容量 ===
     num_leaves: 63               # 原来31太小了，5000只股票需要更多叶子来区分
     max_depth: 6                 # 配合63个叶子，防止过拟合的同时增加区分度
-    learning_rate: 0.02          # 调低学习率，让预测值分布更细腻，不至于快速坍缩
+    learning_rate: 0.01          # MAE需要更低的学习率，收敛更稳定
     
     # === 关键修正：精细化控制 ===
-    min_data_in_leaf: 100         # 减小这个值，允许模型对小众股票有更细致的预测
+    min_data_in_leaf: 150         # 增加这个值，不允许模型对小众股票有更细致的预测
     feature_fraction: 0.5        # 降低列采样，增加树之间的差异性
     bagging_fraction: 0.8
     bagging_freq: 5
     
     # === 关键修正：正则化防止坍缩 ===
-    lambda_l1: 1.0               # 增加L1正则，防止无效特征导致的打结
-    lambda_l2: 3.0               # 增加L2正则
+    lambda_l1: 0.3               # 小L1正则，防止一家独大
+    lambda_l2: 5.0               # 增加L2正则，防止过拟合
     
     verbose: -1
     num_threads: 8
