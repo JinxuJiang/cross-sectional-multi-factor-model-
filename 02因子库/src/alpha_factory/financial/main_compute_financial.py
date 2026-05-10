@@ -57,8 +57,7 @@ FINANCIAL_FACTORS = {
     'roa': {'family': 'profitability', 'method': 'factor_roa', 'desc': '总资产收益率'},
     'roe_growth': {'family': 'profitability', 'method': 'factor_roe_growth', 'desc': 'ROE同比增长'},
     'opm': {'family': 'profitability', 'method': 'factor_opm', 'desc': '营业利润率'},
-    'gross_margin': {'family': 'profitability', 'method': 'factor_gross_margin', 'desc': '毛利率'},
-    
+
     # 成长家族
     'profit_growth': {'family': 'growth', 'method': 'factor_profit_growth', 'desc': '净利润增长率'},
     'revenue_growth': {'family': 'growth', 'method': 'factor_revenue_growth', 'desc': '营收增长率'},

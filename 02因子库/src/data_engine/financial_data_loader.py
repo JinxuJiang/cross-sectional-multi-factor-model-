@@ -85,7 +85,6 @@ class FinancialDataLoader:
         # [2026-03-24] 删除冗余字段：s_fa_ocfps, s_fa_bps, s_fa_eps_basic, s_fa_eps_diluted,
         # s_fa_undistributedps, net_profit_margin, inventory_turnover, du_return_on_equity,
         # equity_roe, net_roe, total_roe, actual_tax_rate, gear_ratio
-        ('sales_gross_profit', False, 'sales_gross_profit'),    # 销售毛利率(对应gross_margin)
         
         # 新增基础数据字段（用于扩充因子库）
         # 资产负债表

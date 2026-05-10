@@ -69,6 +69,9 @@ class DataConstructorV1:
         # 是否使用开盘价计算标签（V1新增）
         self.use_open_price = config['data']['label'].get('use_open_price', True)
         
+        # 因子缺失容忍度：允许最多30%因子缺失（LightGBM原生支持NaN）
+        self.min_non_null_ratio = config['data'].get('min_non_null_ratio', 0.7)
+        
         if self.use_open_price:
             logger.info("DataConstructorV1: 使用开盘价计算标签（真实交易时点）")
         else:
@@ -77,6 +80,14 @@ class DataConstructorV1:
         # ST状态数据路径（新增）
         self.st_status_path = config['data'].get('st_status_path', None)
         self._st_status_df: Optional[pd.DataFrame] = None
+        
+        # 净利润过滤配置（新增）
+        self.net_profit_path = config['data'].get(
+            'net_profit_path',
+            '02因子库/processed_data/financial_data/net_profit_ttm.parquet'
+        )
+        self.profit_filter_pct = config['data'].get('profit_filter_pct', 0.10)
+        self._net_profit_df: Optional[pd.DataFrame] = None
         
         # 缓存（惰性加载）
         self._factor_files: Optional[Dict[str, List[Path]]] = None
@@ -214,6 +225,31 @@ class DataConstructorV1:
         df.index = pd.to_datetime(df.index)
         self._st_status_df = df
         logger.info(f"ST状态数据: {df.shape[0]} 天 x {df.shape[1]} 只股票")
+        return df
+    
+    def _load_net_profit(self) -> Optional[pd.DataFrame]:
+        """
+        加载净利润TTM数据（用于质量过滤）
+        
+        返回：
+        ------
+        pd.DataFrame : index=date, columns=stock_codes, values=net_profit_ttm
+        """
+        if self._net_profit_df is not None:
+            return self._net_profit_df
+        
+        path = Path(self.net_profit_path)
+        if not path.exists():
+            logger.warning(f"净利润数据不存在: {path}，跳过净利润过滤")
+            return None
+        
+        logger.info(f"加载净利润数据: {path}")
+        df = pq.read_table(path).to_pandas()
+        if 'time' in df.columns:
+            df = df.set_index('time')
+        df.index = pd.to_datetime(df.index)
+        self._net_profit_df = df
+        logger.info(f"净利润数据: {df.shape[0]} 天 x {df.shape[1]} 只股票")
         return df
     
     def _load_factor_data(self, factor_name: str, dates: List[pd.Timestamp]) -> pd.DataFrame:
@@ -380,9 +416,13 @@ class DataConstructorV1:
         # 构建特征矩阵
         X_df = pd.DataFrame(factor_values, index=listed_stocks)
         
-        # 3. 剔除因子值缺失的样本（任一因子为NaN则删除该股票）
-        valid_factor_mask = X_df.notna().all(axis=1)
+        # 3. 剔除因子值缺失过多的样本（允许最多30%因子缺失，LightGBM原生支持NaN）
+        n_before = len(X_df)
+        valid_factor_mask = X_df.notna().sum(axis=1) / len(X_df.columns) >= self.min_non_null_ratio
         X_df = X_df[valid_factor_mask]
+        n_after = len(X_df)
+        if n_before > n_after:
+            logger.debug(f"{date.strftime('%Y-%m-%d')}: 因子缺失过滤 {n_before} → {n_after} 只 (阈值{self.min_non_null_ratio:.0%})")
         
         if len(X_df) == 0:
             return None
@@ -445,6 +485,27 @@ class DataConstructorV1:
                 continue
             
             X_day, y_day, stocks_day = result
+            
+            # 新增：训练时净利润过滤（只过滤训练样本，测试/预测不过滤）
+            if self.profit_filter_pct > 0 and y_day is not None:
+                self._load_net_profit()
+                if self._net_profit_df is not None and date in self._net_profit_df.index:
+                    profit_series = self._net_profit_df.loc[date, stocks_day]
+                    threshold = profit_series.quantile(self.profit_filter_pct)
+                    candidate_mask = profit_series <= threshold
+                    delete_mask = candidate_mask & (profit_series < 0)
+                    delete_stocks = set(delete_mask[delete_mask].index.tolist())
+                    
+                    if len(delete_stocks) > 0:
+                        keep_stocks = [s for s in stocks_day if s not in delete_stocks]
+                        keep_indices = [stocks_day.index(s) for s in keep_stocks]
+                        X_day = X_day[keep_indices]
+                        y_day = y_day[keep_indices]
+                        stocks_day = keep_stocks
+                        logger.debug(
+                            f"{date.strftime('%Y-%m-%d')}: 净利润过滤 {len(delete_stocks)} 只 "
+                            f"(最低{self.profit_filter_pct:.0%}候选池中净利润<0)"
+                        )
             
             X_list.append(X_day)
             y_list.append(y_day)

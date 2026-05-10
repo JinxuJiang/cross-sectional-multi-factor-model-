@@ -26,7 +26,8 @@ def fill_missing(
     factor: pd.Series,
     industry: pd.Series,
     market_cap: pd.Series,
-    verbose: bool = False
+    verbose: bool = False,
+    max_missing_ratio: float = 0.05
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
     """
     缺失值填补 (单截面)
@@ -49,8 +50,9 @@ def fill_missing(
     ---------
     1. 缺失市值的 → 整行剔除
     2. 缺失行业的 → 整行剔除
-    3. 缺失因子值的 → 用行业当日中位数填补
-    4. 保留原始索引顺序
+    3. 缺失因子值的 → 用行业当日中位数填补（仅当缺失率低于阈值时）
+    4. 缺失率超过阈值 → 保留NaN，不做填充
+    5. 保留原始索引顺序
     """
     if factor.empty:
         return factor, industry, market_cap
@@ -65,9 +67,6 @@ def fill_missing(
         'industry': aligned_industry,
         'market_cap': aligned_market_cap
     })
-    
-    # 记录原始索引
-    original_index = df.index.copy()
     
     # Step 1: 剔除缺失市值或行业的行
     mask_keep = df['market_cap'].notna() & df['industry'].notna()
@@ -84,8 +83,20 @@ def fill_missing(
         empty_market_cap = pd.Series(dtype=float, index=market_cap.index[:0])
         return empty_factor, empty_industry, empty_market_cap
     
-    # Step 2: 用行业当日中位数填补因子缺失值
-    # 使用 transform 计算每个行业的中位数，然后填补（无警告）
+    # Step 1.5: 检查因子缺失率，超过阈值则跳过填充
+    missing_count = df_clean['factor'].isna().sum()
+    missing_ratio = missing_count / len(df_clean) if len(df_clean) > 0 else 0.0
+    
+    if missing_ratio > max_missing_ratio:
+        if verbose:
+            print(f"  跳过填充：因子缺失率 {missing_ratio:.1%} ({missing_count}只) > 阈值 {max_missing_ratio:.1%}，保留NaN")
+        # 不做填充，直接返回（NaN保留，后续all()过滤会剔除）
+        clean_factor = pd.to_numeric(df_clean['factor'], errors='coerce')
+        clean_industry = df_clean['industry']
+        clean_market_cap = pd.to_numeric(df_clean['market_cap'], errors='coerce')
+        return clean_factor, clean_industry, clean_market_cap
+    
+    # Step 2: 用行业当日中位数填补因子缺失值（仅对低缺失率因子执行）
     industry_median = df_clean.groupby('industry')['factor'].transform('median')
     df_clean['factor'] = df_clean['factor'].fillna(industry_median)
     
@@ -110,7 +121,8 @@ def fill_missing(
 def fill_missing_wide(
     factor_df: pd.DataFrame,
     industry_df: pd.DataFrame,
-    market_cap_df: pd.DataFrame
+    market_cap_df: pd.DataFrame,
+    max_missing_ratio: float = 0.05
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     缺失值填补 (宽表格式，批量处理)
@@ -142,7 +154,7 @@ def fill_missing_wide(
         day_industry = industry_df.loc[date] if date in industry_df.index else pd.Series(dtype=object)
         day_market_cap = market_cap_df.loc[date] if date in market_cap_df.index else pd.Series(dtype=float)
         
-        clean_f, clean_i, clean_m = fill_missing(day_factor, day_industry, day_market_cap)
+        clean_f, clean_i, clean_m = fill_missing(day_factor, day_industry, day_market_cap, max_missing_ratio=max_missing_ratio)
         
         clean_factors[date] = clean_f
         clean_industries[date] = clean_i

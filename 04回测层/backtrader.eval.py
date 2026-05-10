@@ -11,7 +11,7 @@ python backtrader.eval_1.1.py --exp-id exp_001
 python backtrader.eval_1.1.py -e test_001_fined_v1
 
 # 使用平滑后的预测（smoothed_predictions.parquet）
-python backtrader.eval_1.1.py --exp-id ensemble_5d_20d_v1 --use-smooth
+python backtrader.eval_1.1.py --exp-id ensemble_5d_20d_60d_v1 --use-smooth
 
 命令行参数:
 -----------
@@ -43,7 +43,7 @@ from functools import lru_cache
 STRATEGY_PARAMS = {
     'stocks_per_batch': 20,           # 每次选股数量
     'start_date': datetime(2020, 1, 1),  # 回测开始日期
-    'end_date': datetime(2026, 4, 30),   # 回测结束日期
+    'end_date': datetime(2026, 5, 30),   # 回测结束日期
     'initial_cash': 50000,           # 初始资金
     'commission': 0.002               # 手续费率 (0.2%)
 }

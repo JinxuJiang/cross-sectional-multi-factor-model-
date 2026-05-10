@@ -162,9 +162,7 @@ def neutralize(
         y_neutralized = pd.Series(index=y.index, dtype=float)
         y_neutralized[residuals.index] = residuals
         
-        # 被剔除的样本（共线或缺失）设为0
-        y_neutralized = y_neutralized.fillna(0)
-        
+        # 不填充NaN：原始因子为NaN的股票保持NaN，后续all()过滤会剔除
         return y_neutralized
         
     except Exception as e:

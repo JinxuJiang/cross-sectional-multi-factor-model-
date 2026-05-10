@@ -34,7 +34,8 @@ def clean_factor(
     industry: pd.Series,
     market_cap: pd.Series,
     steps: Optional[List[str]] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    max_missing_ratio: float = 0.05
 ) -> pd.Series:
     """
     一键清洗因子 (单截面)
@@ -60,7 +61,7 @@ def clean_factor(
     流程:
     -----
     1. MAD去极值 (3倍MAD)
-    2. 填补缺失值 (缺市值/行业剔除，其他用行业中位数填补)
+    2. 填补缺失值 (缺市值/行业剔除，低缺失率用行业中位数填补，高缺失率保留NaN)
     3. OLS中性化 (剥离行业+对数市值Beta)
     4. Z-Score标准化 (输出N(0,1))
     """
@@ -88,7 +89,7 @@ def clean_factor(
     if 'missing' in steps:
         if verbose:
             print("Step 2: 填补缺失值...")
-        result, industry_clean, market_cap_clean = fill_missing(result, industry, market_cap, verbose=verbose)
+        result, industry_clean, market_cap_clean = fill_missing(result, industry, market_cap, verbose=verbose, max_missing_ratio=max_missing_ratio)
         if verbose:
             print(f"  完成，剩余样本数: {len(result)}")
     else:
@@ -126,7 +127,8 @@ def clean_factor_wide(
     industry_df: pd.DataFrame,
     market_cap_df: pd.DataFrame,
     steps: Optional[List[str]] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    max_missing_ratio: float = 0.05
 ) -> pd.DataFrame:
     """
     一键清洗因子 (宽表格式，批量处理)
@@ -191,7 +193,8 @@ def clean_factor_wide(
                 day_industry,
                 day_market_cap,
                 steps=steps,
-                verbose=False
+                verbose=False,
+                max_missing_ratio=max_missing_ratio
             )
             # 确保是数值类型
             result.loc[date] = pd.to_numeric(day_clean, errors='coerce')
