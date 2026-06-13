@@ -444,7 +444,7 @@ class DataConstructorV1:
             # 实盘预测模式，不返回label
             return X_df.values, None, X_df.index.tolist()
     
-    def build(self, dates: List[pd.Timestamp]) -> Tuple[pd.DataFrame, pd.Series]:
+    def build(self, dates: List[pd.Timestamp], apply_profit_filter: bool = False) -> Tuple[pd.DataFrame, pd.Series]:
         """
         构造指定日期范围的数据集（带label，用于训练/验证/测试）
         
@@ -452,6 +452,8 @@ class DataConstructorV1:
         ------
         dates : List[pd.Timestamp]
             需要构造数据的日期列表
+        apply_profit_filter : bool
+            是否应用净利润过滤。仅训练集应开启，验证/测试集保持全市场口径。
             
         返回：
         ------
@@ -486,8 +488,8 @@ class DataConstructorV1:
             
             X_day, y_day, stocks_day = result
             
-            # 新增：训练时净利润过滤（只过滤训练样本，测试/预测不过滤）
-            if self.profit_filter_pct > 0 and y_day is not None:
+            # 训练时净利润过滤（只过滤训练样本，验证/测试/预测不过滤）
+            if apply_profit_filter and self.profit_filter_pct > 0 and y_day is not None:
                 self._load_net_profit()
                 if self._net_profit_df is not None and date in self._net_profit_df.index:
                     profit_series = self._net_profit_df.loc[date, stocks_day]

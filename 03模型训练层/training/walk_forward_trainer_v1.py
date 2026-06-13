@@ -205,18 +205,18 @@ class WalkForwardTrainerV1:
         
         # 1. 构造数据（使用V1版本，真实交易时点价格）
         logger.info("构造训练数据...")
-        X_train, y_train = self.data_constructor.build(train_dates)
+        X_train, y_train = self.data_constructor.build(train_dates, apply_profit_filter=True)
         logger.info(f"训练集: {len(X_train)} 个样本")
         if self.config['data']['label'].get('use_open_price', True):
             horizon = self.config['data']['label']['horizon']
             logger.info(f"标签计算：T+1开盘买入，T+{horizon+1}开盘卖出（真实交易时点）")
         
         logger.info("构造验证数据...")
-        X_valid, y_valid = self.data_constructor.build(valid_dates)
+        X_valid, y_valid = self.data_constructor.build(valid_dates, apply_profit_filter=False)
         logger.info(f"验证集: {len(X_valid)} 个样本")
         
         logger.info("构造测试数据...")
-        X_test, y_test = self.data_constructor.build(test_dates)
+        X_test, y_test = self.data_constructor.build(test_dates, apply_profit_filter=False)
         logger.info(f"测试集: {len(X_test)} 个样本")
         
         if len(X_train) == 0 or len(X_test) == 0:
