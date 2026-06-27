@@ -7,6 +7,7 @@ xtquant_250807/
 00_QMT_API知识库/
 01数据/01_QMT_API知识库/
 validation/
+04组合优化层/
 test/
 **/test/
 01数据/tests/

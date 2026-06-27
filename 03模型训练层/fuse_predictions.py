@@ -1,459 +1,308 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-多模型预测融合脚本 (V2 - 支持任意数量模型)
-动态IC加权融合多个模型的平滑预测
+多模型预测融合脚本 V2：Quarterly PIT 口径
+========================================
 
-使用方法:
-    python fuse_predictions.py --exps test_001_hor5_v1 test_001_fined_20_v1 --base-idx 1 --output-exp ensemble_5d_20d_v1
-    python fuse_predictions.py --exps exp_5d_001_v1 exp_20d_001_v1 exp_60d_001_v1 --base-idx 1 --output-exp ensemble_5d_20d_60d_v1   
+用途：
+    融合多个 V2 单模型输出的 `smoothed_predictions.parquet`。
 
-参数说明:
-    --exps:      输入模型实验ID列表（按顺序排列，索引从0开始）
-    --base-idx:  基准模型索引（从0开始），决定IC权重计算的滞后天数(lag)
-                 lag = 基准模型的horizon，用于避免使用未来信息计算权重
-                 示例: --exps hor5 hor20 hor60 --base-idx 1 表示以hor20为基准，lag=20
-    --output-exp: 融合后的输出实验ID
+    V2 不再区分 test/live，也不再使用 split_date：
+    - 每个输入模型都是一条 PIT predictions 序列；
+    - 每天取所有模型共同股票集合；
+    - 每个模型每天做截面 rank 标准化；
+    - 用滞后 IC 均值生成动态权重；
+    - 输出一条融合后的 `predictions.parquet` 和 `smoothed_predictions.parquet`。
 
-逻辑:
-    1. 读取各模型的 smoothed_predictions.parquet 和 smoothed_live_predictions.parquet
-    2. 确定分界日期：最长horizon模型的test结束日期
-    3. 每天取股票交集（所有模型都有的股票）
-    4. 每天截面排名标准化（pct_rank）
-    5. 计算滞后IC权重（lag=基准模型horizon）
-    6. 融合test（<=分界日期）：每天加权平均排名
-    7. 融合live（>分界日期）：固定使用test最后一天权重
-    
-输出:
-    - smoothed_predictions.parquet: 融合test预测
-    - smoothed_live_predictions.parquet: 融合live预测  
-    - fusion_config.yaml: 融合配置记录
+常用命令：
+    python fuse_predictions.py \
+        --exps qv2_5d_full_v2 qv2_20d_full_v2 qv2_60d_full_v2 \
+        --base-idx 1 \
+        --output-exp qv2_ensemble_5d_20d_60d
 
---base-idx 选择建议:
-    - 0 (horizon=5):   权重变化快，适合震荡市场
-    - 1 (horizon=20):  权重变化适中，推荐选择 ✅
-    - 2 (horizon=60):  权重变化慢，适合趋势市场
+参数说明：
+    --exps          输入模型实验ID列表，按顺序排列，索引从0开始
+    --base-idx      基准模型索引；决定 IC 权重滞后天数 lag
+                    lag = 基准模型 horizon，用于避免使用尚未兑现的收益计算权重
+    --output-exp    融合后实验ID
+
+输入：
+    03模型训练层/experiments/{exp_id}/smoothed_predictions.parquet
+
+输出：
+    03模型训练层/experiments/{output_exp}/
+        predictions.parquet
+        smoothed_predictions.parquet
+        fusion_config.yaml
+
+说明：
+    输出的 `pred_score` 和 `pred_score_smooth` 都是融合后的 rank 分数。
+    为了兼容现有回测，推荐继续使用：
+        python backtrader.eval.py --exp-id {output_exp} --use-smooth
 """
 
-import pandas as pd
-import numpy as np
-import yaml
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import Dict, List
+
+import numpy as np
+import pandas as pd
+import yaml
 
 
 def parse_args():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(description='多模型预测融合')
-    parser.add_argument('--exps', nargs='+', required=True,
-                        help='多个模型实验ID（如：test_001_hor5_v1 test_001_fined_20_v1）')
-    parser.add_argument('--base-idx', type=int, default=0,
-                        help=('基准模型索引（从0开始），决定IC权重计算的滞后天数(lag)。'
-                              'lag = 基准模型的horizon，用于避免使用未来信息。'
-                              '例如：--exps hor5 hor20 hor60 --base-idx 1 表示lag=20。'
-                              '建议选择horizon适中的模型（如20d）作为基准。'))
-    parser.add_argument('--output-exp', required=True,
-                        help='输出实验ID（如：ensemble_5d_20d_v1）')
+    parser = argparse.ArgumentParser(description="多模型预测融合 V2 (Quarterly PIT)")
+    parser.add_argument(
+        "--exps",
+        nargs="+",
+        required=True,
+        help="多个模型实验ID，如 qv2_5d_full_v2 qv2_20d_full_v2 qv2_60d_full_v2",
+    )
+    parser.add_argument(
+        "--base-idx",
+        type=int,
+        default=0,
+        help="基准模型索引，决定IC权重滞后天数 lag=base_model_horizon；推荐20d模型索引",
+    )
+    parser.add_argument("--output-exp", required=True, help="输出实验ID，如 qv2_ensemble_5d_20d_60d")
     return parser.parse_args()
 
 
 def load_model_config(exp_dir: Path) -> Dict:
-    """加载模型配置，获取horizon信息"""
-    config_path = exp_dir / 'config.yaml'
+    config_path = exp_dir / "config.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"配置不存在: {config_path}")
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    
-    horizon = config.get('data', {}).get('label', {}).get('horizon', 20)
-    return {'horizon': horizon}
+    horizon = config.get("data", {}).get("label", {}).get("horizon", 20)
+    return {"horizon": horizon}
 
 
-def load_model_data(exp_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    加载模型数据
-    返回: (test_df, live_df)
-    """
-    # 读取test数据
-    test_file = exp_dir / 'smoothed_predictions.parquet'
-    if not test_file.exists():
-        raise FileNotFoundError(f"Test预测不存在: {test_file}")
-    
-    test_df = pd.read_parquet(test_file)
-    test_df['date'] = pd.to_datetime(test_df['date'])
-    
-    # 读取live数据（如果存在）
-    live_file = exp_dir / 'smoothed_live_predictions.parquet'
-    if live_file.exists():
-        live_df = pd.read_parquet(live_file)
-        live_df['date'] = pd.to_datetime(live_df['date'])
-    else:
-        live_df = pd.DataFrame(columns=test_df.columns)
-    
-    return test_df, live_df
+def load_model_data(exp_dir: Path) -> pd.DataFrame:
+    pred_file = exp_dir / "smoothed_predictions.parquet"
+    if not pred_file.exists():
+        raise FileNotFoundError(f"平滑预测不存在: {pred_file}")
+
+    df = pd.read_parquet(pred_file)
+    df["date"] = pd.to_datetime(df["date"])
+    if "pred_score_smooth" not in df.columns:
+        raise ValueError(f"{pred_file} 缺少 pred_score_smooth 列")
+    if "actual_return" not in df.columns:
+        df["actual_return"] = np.nan
+    if "is_evaluable" not in df.columns:
+        df["is_evaluable"] = df["actual_return"].notna()
+    return df
 
 
-def determine_split_date(models_data: List[Dict]) -> pd.Timestamp:
-    """
-    确定分界日期：最长horizon模型的test结束日期
-    """
-    # 找到horizon最长的模型
-    longest_model = max(models_data, key=lambda x: x['horizon'])
-    
-    # 该模型的test结束日期
-    split_date = longest_model['test_df']['date'].max()
-    
-    print(f"\n[分界日期确定]")
-    print(f"  最长horizon模型: {longest_model['exp_id']} (horizon={longest_model['horizon']})")
-    print(f"  分界日期: {split_date.date()}")
-    
-    return split_date
-
-
-def merge_with_intersection(dfs: List[pd.DataFrame], value_col: str = 'pred_score_smooth') -> pd.DataFrame:
-    """
-    合并多个DataFrame，按日期取股票交集
-    每天只有所有模型都有的股票才保留
-    """
-    n_models = len(dfs)
-    
-    # 准备合并用的列名
-    prepared_dfs = []
+def merge_with_intersection(dfs: List[pd.DataFrame], value_col: str = "pred_score_smooth") -> pd.DataFrame:
+    """按 date + stock_code 取所有模型交集。actual_return 使用第一个模型口径。"""
+    prepared = []
     for i, df in enumerate(dfs):
-        df = df.copy()
-        if value_col not in df.columns:
-            raise ValueError(f"DF {i} 缺少列 {value_col}, 现有列: {df.columns.tolist()}")
-        df[f'pred_{i}'] = df[value_col]
-        prepared_dfs.append(df[['date', 'stock_code', f'pred_{i}', 'actual_return']])
-    
-    # 从第一个模型开始
-    merged = prepared_dfs[0].copy()
-    
-    # 逐个合并其他模型，取交集
-    for i in range(1, n_models):
-        merged = pd.merge(
-            merged, 
-            prepared_dfs[i][['date', 'stock_code', f'pred_{i}']], 
-            on=['date', 'stock_code'],
-            how='inner'  # inner join取交集
+        keep_cols = ["date", "stock_code", value_col]
+        extra_cols = []
+        if i == 0:
+            for col in ["actual_return", "is_evaluable", "model_period", "fold_id"]:
+                if col in df.columns:
+                    extra_cols.append(col)
+
+        part = df[keep_cols + extra_cols].copy()
+        part = part.rename(columns={value_col: f"pred_{i}"})
+        prepared.append(part)
+
+    merged = prepared[0]
+    for i in range(1, len(prepared)):
+        merged = merged.merge(
+            prepared[i][["date", "stock_code", f"pred_{i}"]],
+            on=["date", "stock_code"],
+            how="inner",
         )
-    
     return merged
 
 
-def calc_daily_ic(df: pd.DataFrame, n_models: int, base_actual_col: str = 'actual_return') -> pd.DataFrame:
-    """
-    计算每日截面IC（用基准模型的actual_return作为标签）
-    """
-    dates = sorted(df['date'].unique())
-    ic_records = []
-    
-    for date in dates:
-        day_data = df[df['date'] == date]
-        
-        if len(day_data) < 10:  # 股票太少跳过
-            ic_record = {'date': date}
+def rank_standardize(df: pd.DataFrame, n_models: int) -> pd.DataFrame:
+    df = df.copy()
+    for i in range(n_models):
+        df[f"rank_{i}"] = df.groupby("date")[f"pred_{i}"].rank(pct=True)
+    return df
+
+
+def calc_daily_ic(df: pd.DataFrame, n_models: int) -> pd.DataFrame:
+    records = []
+    for date, day_df in df.groupby("date", sort=True):
+        eval_df = day_df[day_df["actual_return"].notna()].copy()
+        record = {"date": date}
+        if len(eval_df) < 10:
             for i in range(n_models):
-                ic_record[f'ic_{i}'] = np.nan
-            ic_records.append(ic_record)
+                record[f"ic_{i}"] = np.nan
+            records.append(record)
             continue
-        
-        # 获取基准actual_return
-        actual = day_data[base_actual_col].values
-        
-        # 计算各模型的Spearman IC
-        ic_record = {'date': date}
+
+        actual_rank = eval_df["actual_return"].rank()
         for i in range(n_models):
-            pred = day_data[f'pred_{i}'].values
-            # Spearman IC: rank correlation
-            pred_rank = pd.Series(pred).rank().values
-            actual_rank = pd.Series(actual).rank().values
-            
-            # 计算相关系数
-            if len(pred_rank) > 1:
-                ic = np.corrcoef(pred_rank, actual_rank)[0, 1]
-            else:
-                ic = np.nan
-            
-            ic_record[f'ic_{i}'] = ic
-        
-        ic_records.append(ic_record)
-    
-    return pd.DataFrame(ic_records)
+            pred_rank = eval_df[f"pred_{i}"].rank()
+            record[f"ic_{i}"] = pred_rank.corr(actual_rank)
+        records.append(record)
+    return pd.DataFrame(records)
 
 
 def calc_lagged_weights(daily_ic: pd.DataFrame, lag: int) -> pd.DataFrame:
     """
-    计算滞后IC权重
-    第t天的权重 = 第0天到第t-lag天的IC累积均值（不包含最近lag天）
-    前lag天（t < lag）：等权重
+    第 t 天权重只使用 t-lag 及以前的 IC。
+    若历史正IC不足，则使用等权。
     """
-    n_models = len([c for c in daily_ic.columns if c.startswith('ic_')])
-    n_days = len(daily_ic)
-    
-    weights_records = []
-    
-    for t in range(n_days):
-        date = daily_ic.iloc[t]['date']
-        
+    n_models = len([c for c in daily_ic.columns if c.startswith("ic_")])
+    records = []
+    ic_cols = [f"ic_{i}" for i in range(n_models)]
+
+    for t, row in daily_ic.reset_index(drop=True).iterrows():
         if t < lag:
-            # 前lag天使用等权重
-            w = [1.0 / n_models] * n_models
+            weights = np.repeat(1.0 / n_models, n_models)
         else:
-            # 历史IC累积均值 [0, t-lag]
-            hist_ic = daily_ic.iloc[:t-lag+1][[f'ic_{i}' for i in range(n_models)]].mean()
-            
-            # 负IC截断为0
-            hist_ic = hist_ic.clip(lower=0)
-            
-            # 归一化权重
-            if hist_ic.sum() > 0:
-                w = (hist_ic / hist_ic.sum()).values
+            hist_ic = daily_ic.iloc[: t - lag + 1][ic_cols].mean(skipna=True).clip(lower=0)
+            if hist_ic.notna().any() and hist_ic.sum() > 0:
+                weights = (hist_ic / hist_ic.sum()).fillna(0).values
             else:
-                w = [1.0 / n_models] * n_models
-        
-        record = {'date': date}
+                weights = np.repeat(1.0 / n_models, n_models)
+
+        rec = {"date": row["date"]}
         for i in range(n_models):
-            record[f'weight_{i}'] = w[i]
-        weights_records.append(record)
-    
-    return pd.DataFrame(weights_records)
-
-
-def rank_standardize(df: pd.DataFrame, n_models: int) -> pd.DataFrame:
-    """
-    每天截面排名标准化（pct_rank）
-    """
-    df = df.copy()
-    
-    for i in range(n_models):
-        df[f'rank_{i}'] = df.groupby('date')[f'pred_{i}'].rank(pct=True)
-    
-    return df
+            rec[f"weight_{i}"] = float(weights[i])
+        records.append(rec)
+    return pd.DataFrame(records)
 
 
 def fuse_with_weights(df: pd.DataFrame, weights_df: pd.DataFrame, n_models: int) -> pd.DataFrame:
-    """
-    使用权重融合排名
-    """
-    df = df.copy()
-    
-    # 合并权重
-    df = df.merge(weights_df, on='date', how='left')
-    
-    # 计算加权融合排名
-    df['rank_fused'] = 0
+    df = df.merge(weights_df, on="date", how="left").copy()
+    df["rank_fused"] = 0.0
     for i in range(n_models):
-        df['rank_fused'] += df[f'weight_{i}'] * df[f'rank_{i}']
-    
-    # 构造输出（与原fuse_predictions.py格式一致）
-    output = df[['date', 'stock_code', 'rank_fused', 'actual_return']].copy()
-    output = output.rename(columns={'rank_fused': 'pred_score_smooth'})
-    
-    # 添加fold_id列（test期间标记为0）
-    output['fold_id'] = 0
-    
-    return output
+        df["rank_fused"] += df[f"weight_{i}"] * df[f"rank_{i}"]
+
+    output_cols = ["date", "stock_code", "rank_fused", "actual_return"]
+    for col in ["is_evaluable", "model_period", "fold_id"]:
+        if col in df.columns:
+            output_cols.append(col)
+
+    out = df[output_cols].copy()
+    out = out.rename(columns={"rank_fused": "pred_score_smooth"})
+    out["pred_score"] = out["pred_score_smooth"]
+    if "is_evaluable" not in out.columns:
+        out["is_evaluable"] = out["actual_return"].notna()
+    if "fold_id" not in out.columns:
+        out["fold_id"] = 0
+
+    ordered_cols = ["date", "stock_code", "pred_score", "pred_score_smooth", "actual_return", "is_evaluable", "fold_id"]
+    if "model_period" in out.columns:
+        ordered_cols.append("model_period")
+    return out[ordered_cols].sort_values(["date", "stock_code"]).reset_index(drop=True)
 
 
-def fuse_with_fixed_weights(df: pd.DataFrame, fixed_weights: pd.Series, n_models: int) -> pd.DataFrame:
-    """
-    使用固定权重融合排名（用于live期间）
-    """
-    df = df.copy()
-    
-    # 计算加权融合排名
-    df['rank_fused'] = 0
-    for i in range(n_models):
-        df['rank_fused'] += fixed_weights.iloc[i] * df[f'rank_{i}']
-    
-    # 构造输出
-    output = df[['date', 'stock_code', 'rank_fused']].copy()
-    output['actual_return'] = np.nan  # live无标签
-    output = output.rename(columns={'rank_fused': 'pred_score_smooth'})
-    output['fold_id'] = -1  # live标记为-1
-    
-    return output
-
-
-def save_fusion_config(output_dir: Path, models_data: List[Dict], split_date: pd.Timestamp,
-                       lag: int, last_weights: pd.Series, base_idx: int, base_model: str):
-    """保存融合配置"""
+def save_fusion_config(
+    output_dir: Path,
+    models_data: List[Dict],
+    lag: int,
+    final_weights: pd.Series,
+    base_idx: int,
+):
     config = {
-        'fusion_info': {
-            'n_models': len(models_data),
-            'base_model': base_model,
-            'base_model_index': base_idx,
-            'split_date': split_date.strftime('%Y-%m-%d'),
-            'ic_lag': lag,
-            'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+        "fusion_info": {
+            "mode": "quarterly_pit_v2",
+            "n_models": len(models_data),
+            "base_model": models_data[base_idx]["exp_id"],
+            "base_model_index": base_idx,
+            "ic_lag": lag,
+            "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         },
-        'models': [],
-        'weights': {}
+        "models": [],
+        "final_weights": {},
     }
-    
-    # 记录各模型信息
+
     for i, model in enumerate(models_data):
-        config['models'].append({
-            'index': i,
-            'exp_id': model['exp_id'],
-            'horizon': model['horizon'],
-            'final_weight': float(last_weights.iloc[i])
-        })
-        config['weights'][f'model_{i}'] = float(last_weights.iloc[i])
-    
-    # 保存YAML
-    config_path = output_dir / 'fusion_config.yaml'
-    with open(config_path, 'w', encoding='utf-8') as f:
+        config["models"].append(
+            {
+                "index": i,
+                "exp_id": model["exp_id"],
+                "horizon": model["horizon"],
+                "date_start": str(model["df"]["date"].min().date()),
+                "date_end": str(model["df"]["date"].max().date()),
+                "final_weight": float(final_weights.iloc[i]),
+            }
+        )
+        config["final_weights"][f"model_{i}"] = float(final_weights.iloc[i])
+
+    config_path = output_dir / "fusion_config.yaml"
+    with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-    
     print(f"\n[配置已保存] {config_path}")
 
 
 def main():
     args = parse_args()
-    
-    print("="*70)
-    print("多模型预测融合")
-    print("="*70)
+    if args.base_idx < 0 or args.base_idx >= len(args.exps):
+        raise ValueError(f"--base-idx 超出范围: {args.base_idx}, exps数量={len(args.exps)}")
+
+    print("=" * 70)
+    print("多模型预测融合 V2 (Quarterly PIT)")
+    print("=" * 70)
     print(f"输入模型: {args.exps}")
     print(f"基准模型索引: {args.base_idx}")
     print(f"输出实验ID: {args.output_exp}")
-    print("="*70)
-    
-    # 路径设置
-    base_dir = Path(__file__).parent / 'experiments'
+
+    base_dir = Path(__file__).parent / "experiments"
     output_dir = base_dir / args.output_exp
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 1. 加载各模型配置和数据
-    print("\n[1/8] 加载模型数据...")
+
+    print("\n[1/6] 加载模型数据...")
     models_data = []
-    
     for exp_id in args.exps:
         exp_path = base_dir / exp_id
-        print(f"  加载: {exp_id}")
-        
-        # 加载配置
-        config = load_model_config(exp_path)
-        
-        # 加载数据
-        test_df, live_df = load_model_data(exp_path)
-        
-        print(f"    horizon: {config['horizon']}")
-        print(f"    test: {test_df['date'].min().date()} ~ {test_df['date'].max().date()} ({len(test_df)}行)")
-        if len(live_df) > 0:
-            print(f"    live: {live_df['date'].min().date()} ~ {live_df['date'].max().date()} ({len(live_df)}行)")
-        
-        models_data.append({
-            'exp_id': exp_id,
-            'horizon': config['horizon'],
-            'test_df': test_df,
-            'live_df': live_df
-        })
-    
+        model_config = load_model_config(exp_path)
+        df = load_model_data(exp_path)
+        print(
+            f"  {exp_id}: horizon={model_config['horizon']}, "
+            f"{df['date'].min().date()} ~ {df['date'].max().date()}, rows={len(df)}"
+        )
+        models_data.append({"exp_id": exp_id, "horizon": model_config["horizon"], "df": df})
+
     n_models = len(models_data)
-    
-    # 2. 确定分界日期
-    print("\n[2/8] 确定分界日期...")
-    split_date = determine_split_date(models_data)
-    
-    # 3. 准备数据：test和live分别处理
-    print("\n[3/8] 合并数据（取股票交集）...")
-    
-    # 准备test数据（<=分界日期）
-    test_dfs = []
-    for model in models_data:
-        df = model['test_df'][model['test_df']['date'] <= split_date].copy()
-        test_dfs.append(df)
-    
-    test_merged = merge_with_intersection(test_dfs)
-    print(f"  test交集后: {len(test_merged)}行, {test_merged['date'].nunique()}交易日")
-    
-    # 准备live数据（>分界日期，所有模型的test剩余部分+live）
-    live_dfs = []
-    for model in models_data:
-        # test剩余部分
-        test_remain = model['test_df'][model['test_df']['date'] > split_date].copy()
-        # live部分
-        live_part = model['live_df'].copy()
-        # 合并
-        combined = pd.concat([test_remain, live_part], ignore_index=True)
-        if len(combined) > 0:
-            live_dfs.append(combined)
-    
-    if len(live_dfs) > 0:
-        live_merged = merge_with_intersection(live_dfs)
-        print(f"  live交集后: {len(live_merged)}行, {live_merged['date'].nunique()}交易日")
-    else:
-        live_merged = pd.DataFrame()
-        print("  live数据为空")
-    
-    # 4. 排名标准化
-    print("\n[4/8] 排名标准化...")
-    test_merged = rank_standardize(test_merged, n_models)
-    if len(live_merged) > 0:
-        live_merged = rank_standardize(live_merged, n_models)
-    
-    # 5. 计算每日IC
-    print("\n[5/8] 计算每日IC...")
-    daily_ic = calc_daily_ic(test_merged, n_models)
-    print(f"  共{daily_ic['date'].nunique()}个交易日")
-    
-    # 打印平均IC
-    for i in range(n_models):
-        avg_ic = daily_ic[f'ic_{i}'].mean()
-        print(f"  Model {i} ({models_data[i]['exp_id']}): 平均IC={avg_ic:.4f}")
-    
-    # 6. 计算滞后权重
-    print("\n[6/8] 计算滞后权重...")
-    lag = models_data[args.base_idx]['horizon']
-    base_model = models_data[args.base_idx]['exp_id']
-    print(f"  基准模型: {base_model} (索引={args.base_idx})")
-    print(f"  IC滞后lag={lag}天（等于基准模型的horizon）")
-    print(f"  说明: 前{lag}天使用等权重，第{lag+1}天起使用历史IC均值")
-    test_weights = calc_lagged_weights(daily_ic, lag)
-    
-    # 7. 融合test
-    print("\n[7/8] 融合test预测...")
-    test_fused = fuse_with_weights(test_merged, test_weights, n_models)
-    
-    # 保存
-    test_file = output_dir / 'smoothed_predictions.parquet'
-    test_fused.to_parquet(test_file, index=False)
-    print(f"  已保存: {test_file} ({len(test_fused)}行)")
-    
-    # 8. 融合live
-    print("\n[8/8] 融合live预测...")
-    if len(live_merged) > 0:
-        # 获取test最后一天权重
-        last_date = test_weights['date'].max()
-        last_weights = test_weights[test_weights['date'] == last_date][[f'weight_{i}' for i in range(n_models)]].iloc[0]
-        
-        print(f"  使用{last_date.date()}的固定权重:")
-        for i in range(n_models):
-            print(f"    Model {i}: {last_weights.iloc[i]:.4f}")
-        
-        live_fused = fuse_with_fixed_weights(live_merged, last_weights, n_models)
-        
-        live_file = output_dir / 'smoothed_live_predictions.parquet'
-        live_fused.to_parquet(live_file, index=False)
-        print(f"  已保存: {live_file} ({len(live_fused)}行)")
-    else:
-        last_weights = pd.Series([1.0/n_models]*n_models, index=[f'weight_{i}' for i in range(n_models)])
-        print("  无live数据，跳过")
-    
-    # 9. 保存融合配置
-    save_fusion_config(output_dir, models_data, split_date, lag, last_weights, 
-                       args.base_idx, models_data[args.base_idx]['exp_id'])
-    
-    print("\n" + "="*70)
-    print("融合完成!")
+
+    print("\n[2/6] 合并数据（date+stock交集）...")
+    merged = merge_with_intersection([m["df"] for m in models_data])
+    print(f"  交集后: rows={len(merged)}, dates={merged['date'].nunique()}")
+    print(f"  日期范围: {merged['date'].min().date()} ~ {merged['date'].max().date()}")
+
+    print("\n[3/6] 每日截面rank标准化...")
+    merged = rank_standardize(merged, n_models)
+
+    print("\n[4/6] 计算每日IC和滞后权重...")
+    daily_ic = calc_daily_ic(merged, n_models)
+    lag = models_data[args.base_idx]["horizon"]
+    weights = calc_lagged_weights(daily_ic, lag=lag)
+    for i, model in enumerate(models_data):
+        print(f"  Model {i} ({model['exp_id']}): mean IC={daily_ic[f'ic_{i}'].mean():.4f}")
+    print(f"  lag={lag} (base model: {models_data[args.base_idx]['exp_id']})")
+
+    print("\n[5/6] 融合预测...")
+    fused = fuse_with_weights(merged, weights, n_models)
+
+    pred_file = output_dir / "predictions.parquet"
+    smooth_file = output_dir / "smoothed_predictions.parquet"
+    fused.to_parquet(pred_file, index=False)
+    fused.to_parquet(smooth_file, index=False)
+    print(f"  已保存: {pred_file} ({len(fused)}行)")
+    print(f"  已保存: {smooth_file} ({len(fused)}行)")
+
+    print("\n[6/6] 保存融合配置...")
+    last_weights = weights[[f"weight_{i}" for i in range(n_models)]].iloc[-1]
+    save_fusion_config(output_dir, models_data, lag, last_weights, args.base_idx)
+
+    print("\n" + "=" * 70)
+    print("融合完成")
     print(f"输出目录: {output_dir}")
-    print("="*70)
+    print("=" * 70)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+
