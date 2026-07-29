@@ -68,7 +68,7 @@ class MarketDataLoader:
         
         # 设置默认路径
         if raw_data_path is None:
-            self.raw_data_path = project_root / '01数据' / 'data' / 'raw_data' / 'market_data'
+            self.raw_data_path = project_root / '01数据' / 'data' / 'tushare_data' / 'market_data'
         else:
             self.raw_data_path = Path(raw_data_path)
             

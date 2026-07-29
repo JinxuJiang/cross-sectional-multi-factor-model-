@@ -11,7 +11,7 @@
 | **全流程闭环** | 从原始数据 → 因子计算 → AI建模 → 策略回测，完整可复现的量化流水线 |
 | **高IC预测能力** | 多周期模型(5d/20d/60d) IC加权融合，Rank IC **0.114**，IR **0.9** |
 | **稳健策略收益** | 考虑涨停过滤、滑点、手续费的实盘模拟，**156%** 累计收益（1.5年） |
-| **工程化设计** | Walk-forward滚动训练防过拟合、PIT对齐防未来函数、ST过滤防污染、One Factor One File规范 |
+| **工程化设计** | Quarterly PIT V2 固定季度模型 + Freeze 增量模式防历史信号重算、PIT对齐防未来函数、ST过滤防污染、One Factor One File规范 |
 
 ---
 
@@ -28,7 +28,7 @@
          │                   │                   │                   │
          ▼                   ▼                   ▼                   ▼
   • QMT数据接入        • PIT对齐引擎        • 特征工程          • 双轨验证
-  • 等比前复权         • TTM自动计算        • Walk-forward      • (Alphalens+
+  • 等比前复权         • TTM自动计算        • Quarterly PIT V2  • (Alphalens+
   • 行情/财务/元数据    • 四步清洗流程        • LightGBM           Backtrader)
                        • One Factor        • EMA平滑           • 涨停过滤
                          One File          • 多模型IC加权        • 20%止损风控
@@ -41,7 +41,7 @@
 |:---|:---|:---|:---|
 | **01 数据引擎** | QMT行情/财务API | 等比前复权、PIT原始存储、智能增量更新 | `raw_data/*.parquet` |
 | **02 因子工厂** | 原始行情/财务数据 | PIT对齐、TTM计算、MAD去极值、OLS中性化、Z-Score标准化 | `factors/*.parquet` (47个因子) |
-| **03 AI训练层** | 标准化因子宽表 | Walk-forward滚动训练、EMA平滑、IC加权多模型融合 | `predictions.parquet` |
+| **03 AI训练层** | 标准化因子宽表 | Quarterly PIT V2 固定季度模型 + Freeze 增量、EMA平滑、IC加权多模型融合 | `predictions.parquet` |
 | **04 回测层** | 预测分数+行情 | Alphalens因子检验、Backtrader策略回测(涨停过滤+止损) | 绩效报告、净值曲线 |
 
 ---
@@ -149,27 +149,32 @@ python update_all.py
 
 自动计算47个技术/财务因子并进行标准化清洗，耗时约30分钟。
 
-#### Step 3: 模型训练
+#### Step 3: 模型训练（V2 Quarterly PIT）
 
 ```bash
-# 训练多周期模型
+# 训练多周期模型（V2 为当前默认入口）
 cd 03模型训练层
 
 # 5日短周期
-python main_train_v1.py --config configs/horizon5_config.yaml --exp-id test_5d_v1 -y
+python main_train_v2.py --config configs/horizon5_config.yaml --exp-id qv2_5d_full -y
 
 # 20日中周期（推荐）
-python main_train_v1.py --config configs/horizon20_config.yaml --exp-id test_20d_v1 -y
+python main_train_v2.py --config configs/horizon20_config.yaml --exp-id qv2_20d_full -y
 
 # 60日长周期
-python main_train_v1.py --config configs/horizon60_config.yaml --exp-id test_60d_v1 -y
+python main_train_v2.py --config configs/horizon60_config.yaml --exp-id qv2_60d_full -y
 
-# 多模型融合
+# 多模型融合（V2 口径，不再区分 test/live）
 python fuse_predictions.py \
-    --exps test_5d_v1 test_20d_v1 test_60d_v1 \
+    --exps qv2_5d_full_v2 qv2_20d_full_v2 qv2_60d_full_v2 \
     --base-idx 1 \
-    --output-exp ensemble_5_20_60_v1
+    --output-exp qv2_ensemble_5_20_60
+
+# 月度增量更新（同一 exp-id 追加新日期，不覆盖历史信号）
+python main_train_v2.py --config configs/horizon20_config.yaml --exp-id qv2_20d_full --end-date 2026-07-01 --freeze -y
 ```
+
+> V1 Walk-forward 入口 `main_train_v1.py` 仍保留用于兼容旧实验，新实验请使用 V2。
 
 #### Step 4: 回测验证
 
@@ -209,11 +214,12 @@ python backtrader.eval.py --exp-id ensemble_5_20_60_v1 --use-smooth
 │
 ├── 03模型训练层/              # 【Module 3: AI训练】
 │   ├── models/                # LightGBM回归+排序模型
-│   ├── training/              # Walk-forward训练器
+│   ├── training/              # Walk-forward训练器（V1）/ Quarterly PIT训练器（V2）
 │   ├── dataset/               # 数据构造与切分
 │   ├── configs/               # 配置文件
-│   ├── main_train_v1.py       # 训练主入口
-│   ├── fuse_predictions.py    # 多模型融合
+│   ├── main_train_v1.py       # V1 训练入口（兼容）
+│   ├── main_train_v2.py       # V2 训练主入口（当前默认）
+│   ├── fuse_predictions.py    # 多模型融合（V2 口径）
 │   └── experiments/           # 【运行时生成】实验输出
 │
 ├── 04回测层/                  # 【Module 4: 回测优化】
@@ -277,6 +283,7 @@ python backtrader.eval.py --exp-id ensemble_5_20_60_v1 --use-smooth
 
 - [ ] 遗传算法自动因子挖掘
 - [ ] Transformer模型接入
+- [x] PIT 信号链与 Freeze 增量模式（V2 已完成）
 - [ ] 组合优化（行业中性、换手率约束）
 - [ ] MLOps (MLflow) 实验追踪
 - [ ] 云部署 (Azure)
@@ -285,4 +292,4 @@ python backtrader.eval.py --exp-id ensemble_5_20_60_v1 --use-smooth
 ---
 
 *项目维护: 蒋大王*  
-*最后更新: 2026-03-26*
+*最后更新: 2026-06-27*

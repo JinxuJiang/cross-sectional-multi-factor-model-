@@ -10,6 +10,7 @@
 可选参数：
     --overwrite : 覆盖已存在的文件
     --industry-only : 只处理行业数据
+    --financial-only : 只处理三张财务报表数据
     --fields : 指定要处理的财务字段
 """
 
@@ -33,6 +34,9 @@ def main():
   
   # 只处理行业数据
   python main_prepare_financial_data.py --industry-only
+
+  # 只处理财务数据
+  python main_prepare_financial_data.py --financial-only
   
   # 强制覆盖已存在文件
   python main_prepare_financial_data.py --overwrite
@@ -50,6 +54,12 @@ def main():
         action='store_true',
         help='只处理行业数据'
     )
+
+    parser.add_argument(
+        '--financial-only',
+        action='store_true',
+        help='只处理财务数据，不重建行业文件'
+    )
     
     parser.add_argument(
         '--fields',
@@ -64,11 +74,18 @@ def main():
     print("财务数据准备工具")
     print("=" * 60)
     
-    # 1. 处理行业数据
-    print("\n【1/2】处理行业数据...")
-    print("-" * 60)
-    industry_loader = IndustryLoader()
-    industry_file = industry_loader.prepare_industry_data(overwrite=args.overwrite)
+    if args.industry_only and args.financial_only:
+        parser.error('--industry-only 和 --financial-only 不能同时使用')
+
+    industry_file = None
+    if not args.financial_only:
+        # 1. 处理行业数据
+        print("\n【1/2】处理行业数据...")
+        print("-" * 60)
+        industry_loader = IndustryLoader()
+        industry_file = industry_loader.prepare_industry_data(
+            overwrite=args.overwrite
+        )
     
     if args.industry_only:
         print("\n只处理行业数据，跳过财务数据...")
@@ -88,7 +105,8 @@ def main():
         
         print("\n" + "=" * 60)
         print("输出文件列表:")
-        print(f"  - {industry_file} (行业数据)")
+        if industry_file is not None:
+            print(f"  - {industry_file} (行业数据)")
         for f in output_files:
             print(f"  - {f}")
         print("=" * 60)

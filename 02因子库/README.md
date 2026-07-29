@@ -8,10 +8,10 @@
 
 | 能力 | 说明 |
 |:---|:---|
-| 📅 PIT对齐引擎 | 财务数据按公告日(m_anntime)对齐到交易日，避免未来函数 |
-| 📈 TTM自动计算 | 流量表累计值→单季度→TTM滚动计算，处理跨年Q1特殊情况 |
+| 📅 PIT对齐引擎 | 财务三表独立按各自公告日(f_ann_date)对齐到交易日，避免未来函数 |
+| 📈 TTM自动计算 | 累计值→单季度→严格连续4季度滚动求和，不连续则不出TTM |
 | 🧹 四步清洗流程 | MAD去极值→缺失填补→OLS中性化→Z-Score标准化 |
-| 📁 One Factor One File | 每个因子独立存储为Parquet宽表，已覆盖47个因子 |
+| 📁 One Factor One File | 每个因子独立存储为Parquet宽表，已覆盖45个因子 |
 
 ---
 
@@ -19,10 +19,10 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        原始数据 (01数据层)                           │
+│                        原始数据 (01数据层, Tushare)                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │market_data/  │  │financial_data│  │industry_map  │              │
-│  │(个股日频)    │  │(个股季度)    │  │(行业映射)    │              │
+│  │market_data/  │  │financial_full│  │industry_map  │              │
+│  │(个股日频)    │  │(四表季度分区)│  │(行业映射)    │              │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │
 └─────────┼────────────────┼────────────────┼────────────────────────┘
           │                │                │
@@ -31,7 +31,8 @@
 │                      Data Engine 数据引擎                            │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐      │
 │  │market_data_loader│  │financial_data_  │  │industry_loader  │      │
-│  │  (宽表转换)      │  │  (TTM+PIT对齐)   │  │  (宽表转换)      │      │
+│  │  (宽表转换)      │  │(版本选择+TTM    │  │  (宽表转换)      │      │
+│  │                 │  │  +PIT对齐)      │  │                 │      │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘      │
 └─────────┬────────────────┬────────────────┬─────────────────────────┘
           │                │                │
@@ -84,11 +85,12 @@
 ```
 02因子库/
 ├── update_all.py                    # 一键全量更新脚本
+├── validate_tushare_factor_migration.py  # Tushare迁移验收（只读，PASS/WARN/FAIL）
 │
 ├── src/                             # 源代码
 │   ├── data_engine/                 # 数据预处理（PIT对齐）
-│   │   ├── market_data_loader.py    # 行情数据宽表化
-│   │   ├── financial_data_loader.py # 财务数据TTM+PIT对齐
+│   │   ├── market_data_loader.py    # 行情宽表化（读 tushare_data/market_data）
+│   │   ├── financial_data_loader.py # 财务版本选择+TTM+PIT（读 financial_full 季度分区）
 │   │   ├── pit_aligner.py           # PIT对齐核心算法
 │   │   ├── industry_loader.py       # 行业数据加载
 │   │   ├── main_prepare_market_data.py      # 行情数据入口
@@ -121,14 +123,13 @@
 │
 ├── processed_data/                  # 输出数据（运行时生成）
 │   ├── market_data/                 # 行情基础宽表
-│   ├── financial_data/              # 财务基础宽表（PIT对齐）
+│   ├── financial_data/              # 财务基础宽表（PIT对齐，13个正式文件；
+│   │                                #   另保留少量旧QMT废弃字段文件，已无代码引用）
 │   └── factors/                     # 因子数据（清洗后）
-│       ├── technical/               # 技术因子
-│       └── financial/               # 财务因子
+│       ├── technical/               # 技术因子（21个）
+│       └── financial/               # 财务因子（24个）
 │
-└── test/                            # 测试脚本
-    ├── test_main_technical_fixed.py
-    └── ...
+└── README.md                        # 本文档
 ```
 
 ---
@@ -139,7 +140,10 @@
 
 **问题**：财务数据是季度报告，如何避免未来函数？
 
-**方案**：按公告日（m_anntime）前向填充
+**方案**：三张报表独立处理，各自按自己的实际公告日（f_ann_date）前向填充
+
+- 版本选择：同 `(ts_code, end_date)` 有 type 5（调整前）取最早 type 5，否则取最早 type 1；
+- 三表在季度层绝不合并，利润表/资产负债表/现金流量表各用各的公告日，不互相借用。
 
 ```
 财报1(2010Q1, 4/29公告) ─────── 财报2(2010Q2, 8/25公告)
@@ -159,10 +163,10 @@
 ```
 步骤1: 累计值 → 单季度值
   - 跨年第一季度(3月): 单季度 = 累计值(新年Q1)
-  - 同年内其他季度: 单季度 = 当前累计 - 上期累计
+  - 同年内其他季度: 单季度 = 当前累计 - 上期累计（必须存在同年准确的上一报告期）
 
 步骤2: 单季度 → TTM
-  - TTM(t) = sum(单季度[t-3:t+1])  # 最近4个季度
+  - TTM(t) = sum(单季度[t-3:t+1])  # 严格连续4个季度，不连续则输出NaN
 ```
 
 ### 🧹 因子清洗流程（四步顺序不能变）
@@ -214,6 +218,10 @@ python main_compute_technical.py
 # Step 3: 计算财务因子
 cd ../financial
 python main_compute_financial.py
+
+# Step 4: 迁移/数据验收（只读检查，不改数据）
+cd ../../..
+python validate_tushare_factor_migration.py --full-values --pit-samples 30
 ```
 
 **预计耗时**：~30分钟（i7-12700H，5000只×3000日）
@@ -271,7 +279,7 @@ python main_compute_financial.py
 | 缺失值 | NaN |
 | 文件格式 | Parquet |
 
-### 技术因子字段（22个）
+### 技术因子字段（21个）
 
 | 家族 | 因子 | 说明 |
 |:---|:---|:---|
@@ -282,7 +290,7 @@ python main_compute_financial.py
 | 流动性 | amihud | Amihud非流动性 |
 | 价量 | close_position | 收盘价日内位置 |
 
-### 财务因子字段（25个）
+### 财务因子字段（24个）
 
 | 家族 | 因子 | 说明 |
 |:---|:---|:---|
@@ -304,5 +312,5 @@ python main_compute_financial.py
 
 ---
 
-*最后更新: 2026-03-26*  
+*最后更新: 2026-07-29（数据源切换 Tushare：财务三表独立版本选择+PIT，严格TTM；45个因子已重建验收）*  
 *维护者: 蒋大王*

@@ -1,6 +1,12 @@
 # Data files
 *.parquet
 
+# 进程锁文件（财务重建互斥锁）
+.financial_prepare.lock
+
+# 02因子库临时规划文档
+02因子库/时序因子架构方案.md
+
 # Folders
 xtquant/
 xtquant_250807/
@@ -12,7 +18,10 @@ test/
 **/test/
 01数据/tests/
 01数据/data/raw_data/
+01数据/data/tushare_data/
+01数据/tushare_token.txt
 数据/data/raw_data/
+时序模型/
 
 # Output
 *.png
@@ -42,3 +51,10 @@ venv/
 
 # Log
 *.log
+
+# Tuning runtime artifacts
+03模型训练层/tuning/.cache/
+03模型训练层/tuning/tuning_results/**
+!03模型训练层/tuning/tuning_results/**/
+!03模型训练层/tuning/tuning_results/**/final_recommended_config.yaml
+03模型训练层/03模型训练层/

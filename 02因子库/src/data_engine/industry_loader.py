@@ -65,7 +65,7 @@ class IndustryLoader:
         project_root = factor_lib_root.parent  # 截面多因子模型
         
         if raw_data_path is None:
-            self.raw_data_path = project_root / '01数据' / 'data' / 'raw_data'
+            self.raw_data_path = project_root / '01数据' / 'data' / 'tushare_data'
         else:
             self.raw_data_path = Path(raw_data_path)
             
