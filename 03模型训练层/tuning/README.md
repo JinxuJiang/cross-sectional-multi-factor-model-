@@ -1,4 +1,4 @@
-# LightGBM V2 调参
+# LightGBM V2 调参与参数晋升
 
 本目录提供两个脚本：
 
@@ -35,15 +35,15 @@ final_recommended_config.yaml
 
 缓存默认在脚本结束后删除；需要保留时加 `--keep-cache`。
 
+以下命令均在项目根目录执行。
+
 ## 用法
 
 调参：
 
 ```powershell
-cd C:\Users\蒋大王\Desktop\量化\截面多因子模型\03模型训练层
-
-python tuning\tune_lgbm_v2.py `
-  --base-config configs\horizon20_config.yaml `
+python 03模型训练层/tuning/tune_lgbm_v2.py `
+  --base-config 03模型训练层/configs/horizon20_config.yaml `
   --study-name lgbm20_v2_001 `
   --n-trials 20
 ```
@@ -51,13 +51,27 @@ python tuning\tune_lgbm_v2.py `
 验证：
 
 ```powershell
-python tuning\validate_lgbm_v2_params.py `
+python 03模型训练层/tuning/validate_lgbm_v2_params.py `
   --study-name lgbm20_v2_001 `
+  --base-config 03模型训练层/configs/horizon20_config.yaml `
   --top-k 3
 ```
 
-最终用于完整训练的配置：
+验证完成后会生成：
 
 ```text
 03模型训练层/tuning/tuning_results/lgbm20_v2_001/final_recommended_config.yaml
 ```
+
+该文件是调参原始产物和审计记录，不作为长期正式入口。确认参数后，将其晋升到：
+
+```text
+03模型训练层/configs/production/
+```
+
+晋升时：
+
+- 保留模型参数、训练参数和 `tuning_metadata`。
+- 将数据及输出目录改为项目相对路径。
+- 不修改 `tuning_results/` 中的原始文件。
+- 正式训练统一使用 `configs/production/` 中的配置。

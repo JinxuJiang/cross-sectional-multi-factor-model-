@@ -42,7 +42,7 @@ from functools import lru_cache
 # ==========================================
 STRATEGY_PARAMS = {
     'stocks_per_batch': 20,           # 每次选股数量
-    'start_date': datetime(2020, 1, 1),  # 回测开始日期
+    'start_date': datetime(2023, 10, 1),  # 回测开始日期
     'end_date': datetime(2026, 6, 30),   # 回测结束日期
     'initial_cash': 50000,           # 初始资金
     'commission': 0.002               # 手续费率 (0.2%)

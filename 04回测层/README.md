@@ -1,307 +1,236 @@
-# 04 回测层 (Backtest & Optimization) 📈
+# 04 回测层
 
-> 截面多因子量化选股系统 - 预测分数验证与策略绩效评估层
+> 对模型预测进行 Alphalens 因子检验、Backtrader 策略回测，并生成候选调仓信号。
 
----
+## 当前迁移状态
 
-## ✨ 核心能力
+截至 2026-07-30，第四层尚未完全完成 Tushare/V2 迁移：
 
-| 能力 | 说明 |
-|:---|:---|
-| 🔬 双轨验证 | Alphalens因子检验(IC/IR/分层收益) + Backtrader策略回测(净值/夏普/回撤) |
-| 🚫 涨停过滤 | 自动过滤开盘涨停股(涨幅>=9.9%)，避免买入不可成交股票 |
-| 📉 平滑预测支持 | 支持半衰期平滑后的预测回测，显著降低换手率 |
-| 🛡️ 风险控制 | 15%止损线 + 主板过滤(60/00开头) + 等权90%仓位管理 |
+| 组件 | 状态 | 说明 |
+|:---|:---|:---|
+| `alphalens_analysis.py` | 可用 | 直接读取 V2 的 `predictions.parquet` 或 `smoothed_predictions.parquet` |
+| `backtrader.eval.py` | 部分兼容 | 可读取 V2 主预测链，但 ST 路径仍指向旧 QMT `raw_data` |
+| `generate_live_signals.py` | 尚未兼容 V2 | 仍强制读取 V1 的 `live_predictions.parquet`，且 ST 路径仍为旧 QMT 数据 |
 
----
+因此，在完成第四层代码迁移前：
 
-## 🏗️ 架构概览
+- Alphalens 可以用于 Tushare V2 模型分析。
+- Backtrader 可以运行 V2 预测，但 ST 过滤仍使用旧数据，结果不能作为最终 Tushare 版验收。
+- `generate_live_signals.py` 不能直接用于 V2 实盘信号。
 
-```
-模型预测分数 (predictions.parquet)
-           │
-           ├──→ Alphalens 分析层 ──→ 因子层面验证
-           │                              │
-           │                         • Rank IC / IR
-           │                         • 分层收益（单调性）
-           │                         • 换手率/稳定性
-           │                              │
-           │                              ▼
-           │                    ┌──────────────────┐
-           │                    │ 因子是否有效？    │
-           │                    │ IC > 0.03？      │
-           │                    │ IR > 0.5？       │
-           │                    └────────┬─────────┘
-           │                             │
-           ▼                             ▼
-    Backtrader 回测层 ──→ 策略层面验证
-                              │
-                         • 调仓执行（每月首交易日）
-                         • 涨停过滤 + 主板过滤
-                         • 成本/滑点/止损
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │ 策略是否可盈利？  │
-                    │ 夏普 > 1？       │
-                    │ 回撤 < 20%？     │
-                    └──────────────────┘
+## 数据流
+
+```text
+03模型训练层/experiments/{exp_id}/
+├── predictions.parquet
+└── smoothed_predictions.parquet
+             │
+             ├───────────────┐
+             ▼               ▼
+       Alphalens         Backtrader
+       IC / IR           月度调仓
+       分层收益           成本 / 止损
+       稳定性             成交过滤
+             │               │
+             └───────┬───────┘
+                     ▼
+          04回测层/reports/{exp_id}/
 ```
 
----
+## 目录结构
 
-## 📁 目录结构
-
-```
+```text
 04回测层/
-├── alphalens_analysis.py       # Alphalens因子有效性分析
-├── backtrader.eval.py          # Backtrader策略回测 V1.1
-├── utils.py                    # 公共工具函数
-│
-├── reports/                    # 回测报告输出目录（运行时生成）
-│   └── {exp_id}/
-│       ├── alphalens_report.html       # Alphalens分析汇总报告
-│       ├── ic_analysis.png             # IC时间序列/分布图
-│       ├── returns_analysis.png        # 分层收益分析图
-│       ├── turnover_analysis.png       # 换手率/稳定性分析图
-│       ├── backtest_report.html        # Backtrader回测汇总报告
-│       ├── equity_curve.png            # 净值曲线
-│       ├── trades.csv                  # 详细交易记录
-│       └── performance.json            # 绩效指标（JSON格式）
-│
-└── test/
-    └── check_future_data.py    # 未来函数检查工具
+├── alphalens_analysis.py
+├── backtrader.eval.py
+├── backtrader_eval_有金额上限.py
+├── generate_live_signals.py
+├── utils.py
+├── 项目要求.md
+├── reports/                    # 运行时生成，不进入Git
+└── README.md
 ```
 
----
+`backtrader_eval_有金额上限.py` 是独立实验版本，不是当前默认回测入口。
 
-## 🔄 数据流与逻辑
-
-### 🔬 Alphalens 分析流
-
-```
-predictions.parquet (模型预测)
-        │
-        ▼
-┌──────────────────┐
-│  load_predictions │  ← 加载预测分数（支持平滑预测）
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ load_close_prices │  ← 加载收盘价（计算远期收益）
-└────────┬─────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ get_clean_factor_and_forward_returns    │  ← Alphalens核心函数
-│   • factor: MultiIndex (date, asset)    │
-│   • prices: DataFrame (date × asset)    │
-│   • periods: (20,)  # 20日远期收益      │
-└──────────────────┬──────────────────────┘
-                   │
-                   ├──→ factor_information_coefficient() → Rank IC
-                   ├──→ mean_return_by_quantile() → 分层收益
-                   └──→ factor_rank_autocorrelation() → 换手率
-```
-
-### 📈 Backtrader 回测流
-
-```
-predictions.parquet + market_data/*.parquet
-        │
-        ▼
-┌──────────────────┐
-│ load_and_merge_data │  ← 合并预测+行情数据
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ generate_signals    │  ← 生成调仓信号（每月首交易日）
-│  • 主板过滤        │     只保留60/00开头
-│  • 涨停过滤        │     过滤open_return >= 9.9%
-│  • Top N 选股      │     按prediction排序
-└────────┬─────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│ MyMultiFactorStrategy   │  ← Backtrader策略类
-│  • next()每日执行       │
-│    - 检查15%止损（优先） │
-│    - 调仓日买卖         │
-│  • notify_order()记录交易│
-└────────┬────────────────┘
-         │
-         ▼
-┌──────────────────┐
-│ 绩效分析器         │  ← Sharpe/DrawDown/Returns/TradeAnalyzer
-└────────┬─────────┘
-         │
-         ▼
-    performance.json + equity_curve.png + backtest_report.html
-```
-
----
-
-## 🚀 快速开始
-
-### 1️⃣ 环境准备
-
-```bash
-pip install alphalens-reloaded backtrader matplotlib pandas numpy
-```
-
-### 2️⃣ 运行入口
-
-```bash
-# ========== Alphalens 因子分析 ==========
-
-# 分析原始预测
-python 04回测层/alphalens_analysis.py --exp-id exp_001
-
-# 分析平滑后的预测（推荐，换手率更低）
-python 04回测层/alphalens_analysis.py --exp-id exp_001 --use-smooth
-
-
-# ========== Backtrader 策略回测 ==========
-
-# 使用原始预测回测
-python 04回测层/backtrader.eval.py --exp-id exp_001
-
-# 使用平滑预测回测（推荐）
-python 04回测层/backtrader.eval.py --exp-id exp_001 --use-smooth
-```
-
-**回测参数**（编辑 `backtrader.eval.py` 中 `STRATEGY_PARAMS`）：
-```python
-STRATEGY_PARAMS = {
-    'stocks_per_batch': 20,           # 每次选股数量
-    'start_date': datetime(2020, 1, 1),  # 回测开始日期
-    'end_date': datetime(2026, 3, 31),   # 回测结束日期
-    'initial_cash': 50000,           # 初始资金
-    'commission': 0.002               # 手续费率 (0.2%)
-}
-```
-
----
-
-## 🔑 关键设计
-
-### 🔬 双轨验证的必要性
-
-| 维度 | Alphalens | Backtrader |
-|:---|:---|:---|
-| 关注点 | 因子预测能力 | 策略可执行性 |
-| 核心指标 | IC/IR、分层收益 | 夏普比率、最大回撤 |
-| 交易假设 | 理想化（无成本、无滑点） | 真实交易（成本+滑点+止损） |
-| 用途 | 模型迭代参考 | 实盘前最终验证 |
-| 通过标准 | IC > 0.03, IR > 0.5 | 夏普 > 1, 回撤 < 20% |
-
-**结论**：两者互补，缺一不可。
-- IC高但实盘差 → 执行问题（成本、滑点、涨停等）
-- IC低但实盘好 → 运气/过拟合
-
-### 🚫 涨停过滤逻辑
-
-**问题**：回测时若选到涨停股，实际无法买入，导致回测收益虚高。
-
-**解决方案**：
-```python
-# 计算T+1开盘涨幅
-merged['open_return'] = merged['open_t1'] / merged['close_t'] - 1
-
-# 过滤开盘涨停（>=9.9%）
-tradable_stocks = merged.loc[merged['open_return'] < 0.099, 'stock_code']
-```
-
-**效果**：更真实的回测结果，避免过度乐观。
-
-### 🛡️ 止损逻辑
-
-```python
-def next(self):
-    # 每日检查止损（在调仓逻辑之前执行）
-    for data in self.datas:
-        pos = self.getposition(data)
-        if pos.size > 0:
-            cost_price = pos.price
-            current_price = data.close[0]
-            
-            # 跌超15%止损
-            if current_price < cost_price * (1 - 0.15):
-                self.order_target_percent(data=data, target=0)
-```
-
-**优先级**：止损 > 调仓，风险控制优先。
-
-### 📉 平滑预测的优势
-
-| 指标 | 原始预测 | 平滑预测 |
-|:---|:---|:---|
-| Rank IC | 较高 | 略降（~10%） |
-| 换手率 | 高 | **降低30-50%** |
-| 信号稳定性 | 波动大 | **更稳定** |
-| 实盘交易成本 | 高（频繁调仓） | **更低** |
-
-**建议**：回测时对比 `--use-smooth` 前后的结果，选择合适的参数。
-
----
-
-## 📊 数据规范
+## Alphalens 分析
 
 ### 输入
 
-| 数据 | 路径 | 格式 |
-|:---|:---|:---|
-| 预测分数 | 03模型训练层/experiments/{exp_id}/predictions.parquet | 长表 [date, stock_code, pred_score] |
-| 平滑预测 | 03模型训练层/experiments/{exp_id}/smoothed_predictions.parquet | 长表 [date, stock_code, pred_score_smooth] |
-| 行情数据 | 02因子库/processed_data/market_data/*.parquet | 宽表 [date × stock_code] |
+```text
+03模型训练层/experiments/{exp_id}/predictions.parquet
+03模型训练层/experiments/{exp_id}/smoothed_predictions.parquet
+02因子库/processed_data/market_data/close.parquet
+```
+
+### 运行
+
+原始预测：
+
+```powershell
+python 04回测层/alphalens_analysis.py `
+  --exp-id lgbm20_profit20_full_v2 `
+  --periods 20 `
+  --quantiles 10
+```
+
+平滑预测：
+
+```powershell
+python 04回测层/alphalens_analysis.py `
+  --exp-id lgbm20_profit20_full_v2 `
+  --periods 20 `
+  --quantiles 10 `
+  --use-smooth
+```
+
+### 参数
+
+| 参数 | 含义 |
+|:---|:---|
+| `--exp-id` | `03模型训练层/experiments/` 下的实验目录名 |
+| `--periods` | 远期收益周期，可传一个或多个整数 |
+| `--quantiles` | 截面分组数量，默认 10 |
+| `--use-smooth` | 使用 `pred_score_smooth` |
 
 ### 输出
 
-**Alphalens报告**：
-| 文件 | 说明 |
-|:---|:---|
-| alphalens_report.html | 汇总报告（IC/IR/分层收益/换手率） |
-| ic_analysis.png | IC时间序列、分布、累计曲线 |
-| returns_analysis.png | 分位数收益柱状图、多空收益曲线 |
-| turnover_analysis.png | 因子稳定性分析 |
-
-**Backtrader报告**：
-| 文件 | 说明 |
-|:---|:---|
-| backtest_report.html | 汇总报告（净值曲线、风险指标、交易记录） |
-| equity_curve.png | 策略净值曲线图 |
-| trades.csv | 详细交易记录（日期/代码/买卖/价格/股数） |
-| performance.json | 绩效指标（夏普/回撤/胜率等） |
-
-### performance.json 字段
-
-```json
-{
-  "exp_id": "exp_001",
-  "start_date": "2020-01-01",
-  "end_date": "2024-12-31",
-  "initial_cash": 50000,
-  "final_value": 82345.67,
-  "total_return_pct": 64.69,
-  "annual_return_pct": 12.34,
-  "sharpe_ratio": 1.23,
-  "max_drawdown_pct": 15.67,
-  "total_trades": 480,
-  "win_rate": 52.3
-}
+```text
+reports/{exp_id}/
+├── alphalens_report.html
+├── ic_analysis.png
+├── returns_analysis.png
+├── turnover_analysis.png
+├── alphalens_report_smooth.html
+├── ic_analysis_smooth.png
+├── returns_analysis_smooth.png
+└── turnover_analysis_smooth.png
 ```
 
+带 `_smooth` 后缀的文件只在使用 `--use-smooth` 时生成。
+
+## Backtrader 回测
+
+### 当前策略参数
+
+参数定义在 `backtrader.eval.py` 的 `STRATEGY_PARAMS`：
+
+| 参数 | 当前值 |
+|:---|---:|
+| 每次持仓数量 | 20 |
+| 回测开始日期 | 2023-10-01 |
+| 回测结束日期 | 2026-06-30 |
+| 初始资金 | 50,000 |
+| 手续费 | 0.2% |
+| 目标总仓位 | 90% |
+| 有效止损阈值 | 20% |
+
+当前代码没有显式设置滑点，不应在报告中描述为“已考虑滑点”。
+
+止损参数的实际值为 `0.2`，即 20%；代码中的部分注释和日志仍显示“15%”，属于待修正文案，不影响实际阈值计算。
+
+### 选股和调仓
+
+1. 每月第一个交易日生成调仓截面。
+2. 只保留 `60xxxx.SH` 和 `00xxxx.SZ` 主板股票。
+3. 过滤 ST 股票。
+4. 过滤回测区间内有效数据不足 20 天的股票。
+5. 使用 T 日收盘价和 T+1 日开盘价过滤开盘涨幅不低于 9.9% 的股票。
+6. 按预测分数选择 Top 20。
+7. 以 90% 总仓位等权配置。
+8. 每日检查持仓止损。
+
+### 运行
+
+原始预测：
+
+```powershell
+python 04回测层/backtrader.eval.py `
+  --exp-id lgbm20_profit20_full_v2
+```
+
+平滑预测：
+
+```powershell
+python 04回测层/backtrader.eval.py `
+  --exp-id lgbm20_profit20_full_v2 `
+  --use-smooth
+```
+
+V2 不再生成 `live_predictions.parquet`。Backtrader 找不到该文件时只会打印警告，仍可使用主 `predictions.parquet` 继续运行。
+
+### 输出
+
+```text
+reports/{exp_id}/
+├── rebalance_signals.csv
+├── trades.csv
+├── equity_curve.png
+└── backtest_report.html
+```
+
+当前默认脚本不会生成 `performance.json`。
+
+### 当前 ST 路径问题
+
+`backtrader.eval.py` 当前仍读取：
+
+```text
+01数据/data/raw_data/st_status.parquet
+```
+
+正式 Tushare 路径应为：
+
+```text
+01数据/data/tushare_data/st_status.parquet
+```
+
+在代码迁移完成前，旧文件存在会让回测继续运行，但 ST 状态只更新到旧 QMT 数据的截止日期，可能污染迁移后的回测结果。
+
+## 实盘候选信号
+
+脚本入口：
+
+```powershell
+python 04回测层/generate_live_signals.py `
+  --exp-id <exp_id> `
+  --top-n 20 `
+  --total-cash 100000 `
+  --date 2026-07-28
+```
+
+计划输出：
+
+```text
+reports/{exp_id}/live_signals_YYYYMMDD.csv
+```
+
+当前实际限制：
+
+- 强制读取 `predictions.parquet` 和 `live_predictions.parquet`。
+- V2 只有一条 PIT `predictions.parquet`，因此缺少 `live_predictions.parquet` 时脚本会失败。
+- 不支持 `--use-smooth`。
+- ST 路径仍指向旧 `raw_data`。
+- 最新预测日没有 T+1 行情时，无法提前判断下一交易日是否开盘涨停。
+
+在这些问题修复前，不应将该脚本用于 Tushare V2 的正式下单输入。
+
+## 第四层迁移待办
+
+- [ ] Backtrader ST 路径切换到 `tushare_data/st_status.parquet`。
+- [ ] 实盘信号脚本改为只读取 V2 单一 PIT 预测链。
+- [ ] 实盘信号脚本支持 `smoothed_predictions.parquet`。
+- [ ] 统一 Backtrader 与实盘信号的数据加载函数。
+- [ ] 将有效止损阈值的注释和日志统一为 20%。
+- [ ] 明确最新交易日涨停过滤只能在实际 T+1 开盘后判断。
+- [ ] 增加 V2 预测文件兼容性测试。
+- [ ] 完成 Tushare 三周期融合后的正式回测验收。
+
+## 历史结果说明
+
+`assets/performance/` 中的指标和图表来自迁移前的历史实验，只用于比较基线。第四层完成 Tushare/V2 迁移并重新回测后，才能更新正式绩效结论。
+
 ---
 
-## 📚 详细文档
-
-- [04.1_设计原理与逻辑架构](../docs/04.1_设计原理与逻辑架构.md) - 架构设计、数据流、核心决策
-- [04.2_工程实现与规范](../docs/04.2_工程实现与规范.md) - API说明、数据规范、开发注意事项
-- [04.3_运维与变更日志](../docs/04.3_运维与变更日志.md) - 检查点、性能基准、变更记录
-
----
-
-*最后更新: 2026-03-26*  
-*维护者: 蒋大王*
+*最后更新：2026-07-30*
+*维护者：蒋大王*
