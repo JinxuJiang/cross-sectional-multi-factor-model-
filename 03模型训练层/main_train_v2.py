@@ -123,7 +123,7 @@ def load_config(config_path: Path) -> dict:
 def apply_defaults(config: dict) -> dict:
     config.setdefault("data", {})
     config["data"].setdefault("open_column", "open")
-    config["data"].setdefault("st_status_path", "01数据/data/raw_data/st_status.parquet")
+    config["data"].setdefault("st_status_path", "01数据/data/tushare_data/st_status.parquet")
     config.setdefault("training", {})
     config["training"].setdefault("save_models", True)
     config["training"].setdefault("save_feature_importance", True)

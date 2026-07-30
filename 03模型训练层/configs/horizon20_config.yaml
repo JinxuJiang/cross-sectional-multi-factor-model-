@@ -16,7 +16,8 @@ data:
   open_column: "open"  # V1新增：开盘价字段
   
   # ST状态数据路径（新增）
-  st_status_path: "01数据/data/raw_data/st_status.parquet"
+  st_status_path: "01数据/data/tushare_data/st_status.parquet"
+  profit_filter_pct: 0.20  # 训练集过滤净利润TTM最低20%且亏损股票
   
   # 预测目标配置
   label:
