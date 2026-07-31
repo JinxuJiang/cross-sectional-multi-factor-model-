@@ -30,6 +30,7 @@ equity_curve.png
 backtest_results/
 03模型训练层/experiments/
 04回测层/reports/
+05输出层/exports/
 
 # 例外：允许展示用图片
 !assets/**/*.png

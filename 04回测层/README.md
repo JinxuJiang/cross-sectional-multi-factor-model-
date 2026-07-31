@@ -60,7 +60,7 @@ V2 的 `predictions.parquet` 已覆盖最新无标签日期，不再生成或拼
 
 ```powershell
 python 04回测层/alphalens_analysis.py `
-  --exp-id lgbm20_profit20_full_v2 `
+  --exp-id lgbm20_tushare_profit20_v2 `
   --periods 20 `
   --quantiles 10
 ```
@@ -69,7 +69,7 @@ python 04回测层/alphalens_analysis.py `
 
 ```powershell
 python 04回测层/alphalens_analysis.py `
-  --exp-id lgbm20_profit20_full_v2 `
+  --exp-id lgbm20_tushare_profit20_v2 `
   --periods 20 `
   --quantiles 10 `
   --use-smooth
@@ -137,14 +137,14 @@ reports/{exp_id}/
 
 ```powershell
 python 04回测层/backtrader.eval.py `
-  --exp-id lgbm20_profit20_full_v2
+  --exp-id lgbm20_tushare_profit20_v2
 ```
 
 平滑预测：
 
 ```powershell
 python 04回测层/backtrader.eval.py `
-  --exp-id lgbm20_profit20_full_v2 `
+  --exp-id lgbm20_tushare_profit20_v2 `
   --use-smooth
 ```
 

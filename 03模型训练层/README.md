@@ -4,13 +4,13 @@
 
 ## 当前状态
 
-截至 2026-07-30：
+截至 2026-07-31：
 
 - 正式训练入口为 `main_train_v2.py`。
 - V1 Walk-forward 入口、切分器和训练器已退役。
 - 5 日、20 日和 60 日正式配置统一放在 `configs/production/`。
 - LightGBM V2 调参和稳健性验证脚本已纳入本层。
-- 当前正在进行 Tushare 版 20 日模型全量训练。
+- Tushare 版 20 日和 5 日模型已完成全量训练，60 日模型尚待更新。
 
 `data_constructor_v1.py` 虽保留历史文件名，但仍是 V2 共用的数据构造器，不代表训练流程仍使用 V1。
 
@@ -51,8 +51,8 @@
 │   ├── horizon60_config.yaml
 │   └── production/
 │       ├── horizon5_profit20_tuned_config.yaml
-│       ├── horizon20_profit20_tuned_.yaml
-│       └── horizon60_profit20_tuned_.yaml
+│       ├── horizon20_profit20_tuned_config.yaml
+│       └── horizon60_profit20_tuned_config.yaml
 ├── dataset/
 │   ├── data_constructor_v1.py
 │   └── quarterly_splitter_v2.py
@@ -152,8 +152,8 @@ configs/horizon60_config.yaml
 
 ```text
 configs/production/horizon5_profit20_tuned_config.yaml
-configs/production/horizon20_profit20_tuned_.yaml
-configs/production/horizon60_profit20_tuned_.yaml
+configs/production/horizon20_profit20_tuned_config.yaml
+configs/production/horizon60_profit20_tuned_config.yaml
 ```
 
 Production 配置是正式训练入口：
@@ -178,8 +178,8 @@ tuning/tuning_results/{study_name}/final_recommended_config.yaml
 
 ```powershell
 python 03模型训练层/main_train_v2.py `
-  --config configs/production/horizon20_profit20_tuned_.yaml `
-  --exp-id lgbm20_profit20_full `
+  --config horizon20_profit20_tuned_config.yaml `
+  --exp-id lgbm20_tushare_profit20 `
   --start-date 2020-01-01 `
   --freeze -y
 ```
@@ -187,7 +187,7 @@ python 03模型训练层/main_train_v2.py `
 实际实验目录会自动追加 `_v2`：
 
 ```text
-03模型训练层/experiments/lgbm20_profit20_full_v2/
+03模型训练层/experiments/lgbm20_tushare_profit20_v2/
 ```
 
 ### 5 日模型
@@ -195,7 +195,7 @@ python 03模型训练层/main_train_v2.py `
 ```powershell
 python 03模型训练层/main_train_v2.py `
   --config configs/production/horizon5_profit20_tuned_config.yaml `
-  --exp-id lgbm5_profit20_full `
+  --exp-id lgbm5_tushare_profit20 `
   --start-date 2020-01-01 `
   --freeze -y
 ```
@@ -204,8 +204,8 @@ python 03模型训练层/main_train_v2.py `
 
 ```powershell
 python 03模型训练层/main_train_v2.py `
-  --config configs/production/horizon60_profit20_tuned_.yaml `
-  --exp-id lgbm60_profit20_full `
+  --config horizon60_profit20_tuned_config.yaml `
+  --exp-id lgbm60_tushare_profit20 `
   --start-date 2020-01-01 `
   --freeze -y
 ```
@@ -214,7 +214,7 @@ python 03模型训练层/main_train_v2.py `
 
 ```powershell
 python 03模型训练层/main_train_v2.py `
-  --config configs/production/horizon20_profit20_tuned_.yaml `
+  --config horizon20_profit20_tuned_config.yaml `
   --exp-id lgbm20_asof_20260701 `
   --start-date 2026-04-01 `
   --end-date 2026-07-01 -y
@@ -226,8 +226,8 @@ python 03模型训练层/main_train_v2.py `
 
 ```powershell
 python 03模型训练层/main_train_v2.py `
-  --config configs/production/horizon20_profit20_tuned_.yaml `
-  --exp-id lgbm20_profit20_full `
+  --config horizon20_profit20_tuned_config.yaml `
+  --exp-id lgbm20_tushare_profit20 `
   --start-date 2020-01-01 `
   --end-date 2026-08-31 `
   --freeze -y
@@ -320,7 +320,7 @@ tuning/tuning_results/{study_name}/
 
 ```powershell
 python 03模型训练层/fuse_predictions.py `
-  --exps lgbm5_profit20_full_v2 lgbm20_profit20_full_v2 lgbm60_profit20_full_v2 `
+  --exps lgbm5_tushare_profit20_v2 lgbm20_tushare_profit20_v2 lgbm60_tushare_profit20_v2 `
   --base-idx 1 `
   --output-exp ensemble_5d_20d_60d_profit20_v2
 ```
@@ -354,7 +354,7 @@ experiments/{output_exp}/
 
 ## 后续工作
 
-- 完成 Tushare 版 5d/20d/60d 全量训练。
+- 完成 Tushare 版 60d 全量训练。
 - 对比迁移前后的预测覆盖、Rank IC 和因子重要性。
 - 完成新三周期融合与回测。
 - 将训练结果和验收结论写入运维文档。
@@ -362,5 +362,5 @@ experiments/{output_exp}/
 
 ---
 
-*最后更新：2026-07-30*
+*最后更新：2026-07-31*
 *维护者：蒋大王*

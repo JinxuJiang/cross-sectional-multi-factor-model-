@@ -32,7 +32,7 @@ LightGBM 参数稳健性验证脚本：Quarterly PIT V2
        --study-name lgbm5_v2_profit20_002 `
        --base-config configs\horizon5_config.yaml `
        --top-k 3 `
-       --validate-periods 2021Q1 2023Q1 2024Q4
+       --validate-periods 2021Q1 2023Q1 2024Q4 2026Q2
 
 参数说明：
     --study-name             调参结果目录名，对应 tuning_results/{study_name}

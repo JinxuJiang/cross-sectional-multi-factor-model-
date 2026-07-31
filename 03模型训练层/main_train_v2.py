@@ -14,25 +14,11 @@
     - smoothed_predictions.parquet 使用固定 half-life 平滑，默认 10 天。
 
 常用命令：
-    # 20d 单模型完整训练
-    python main_train_v2.py --config configs/horizon20_config.yaml --exp-id qv2_20d_full -y
+    # 首次全量训练并建立冻结状态
+    python main_train_v2.py --config horizon5_profit20_tuned_config.yaml --exp-id lgbm5_tushare_profit20 --start-date 2020-01-01 --end-date 2026-07-28 --freeze -y
 
-    # 指定 as-of 数据截止日，只训练/输出指定日期范围内涉及的季度
-    python main_train_v2.py --config configs/horizon20_config.yaml --exp-id qv2_20d_asof_20260601 --start-date 2026-04-01 --end-date 2026-06-01 -y
-    python 03模型训练层/main_train_v2.py --config configs/horizon20_config.yaml --exp-id qv2_20d_001 --start-date 2020-01-01 -y
-
-    # 5d / 60d 直接复用原配置
-    python main_train_v2.py --config configs/horizon5_config.yaml --exp-id qv2_5d_full -y
-    python main_train_v2.py --config configs/horizon60_config.yaml --exp-id qv2_60d_full -y
-
-    # 每月增量更新同一个实验：加 --freeze
-    python main_train_v2.py --config configs/horizon20_config.yaml --exp-id exp_20d_001 --start-date 2020-01-01 --end-date 2026-07-01 --freeze -y
-
-    # 换模型、换参数、重新训练新实验：换新的 --exp-id，不用 --reset-freeze
-    python main_train_v2.py --config configs/horizon20_config.yaml --exp-id exp_20d_002 --start-date 2020-01-01 --end-date 2026-07-01 -y
-
-    # 只有明确要重建同一个 exp-id 的冻结状态，才用 --reset-freeze
-    python main_train_v2.py --config configs/horizon20_config.yaml --exp-id exp_20d_001 --start-date 2020-01-01 --end-date 2026-07-01 --reset-freeze -y
+    # 下月继续同一实验：复用冻结模型，只追加缺失预测
+    python main_train_v2.py --config horizon5_profit20_tuned_config.yaml --exp-id lgbm5_tushare_profit20 --start-date 2020-01-01 --end-date 2026-08-31 --freeze -y
 
 参数说明：
     --exp-id             实验ID；若不以 _v2 结尾，会自动追加 _v2
@@ -112,6 +98,10 @@ def setup_logging():
 def load_config(config_path: Path) -> dict:
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    production_path = Path(__file__).parent / "configs" / "production" / config_path.name
+    if production_path.exists():
+        with open(production_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
     fallback_path = Path(__file__).parent / "configs" / config_path.name
     if fallback_path.exists():

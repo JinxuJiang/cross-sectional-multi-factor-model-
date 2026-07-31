@@ -1,17 +1,18 @@
 # 截面多因子量化选股系统
 
-> 基于 Tushare、PIT 因子工程和 LightGBM Quarterly PIT V2 的 A 股截面选股系统，覆盖数据采集、因子构建、模型训练、预测融合和策略回测。
+> 基于 Tushare、PIT 因子工程和 LightGBM Quarterly PIT V2 的 A 股截面选股系统，覆盖数据采集、因子构建、模型训练、策略回测和正式 Alpha 发布。
 
 ## 当前状态
 
-截至 2026-07-30：
+截至 2026-07-31：
 
 - 01 数据层、02 因子层和 03 模型训练层已由 QMT 迁移至 Tushare，旧 QMT 数据仅保留作历史对照。
 - 数据层和因子层已完成迁移验收，45 个因子已基于 Tushare 数据重建。
 - 模型训练层已统一到 Quarterly PIT V2，V1 Walk-forward 入口已退役。
-- 20 日 Tushare 模型正在进行全量训练；5 日、60 日模型及新融合回测将在其后更新。
+- 20 日 Tushare 模型已完成训练和回测；5 日模型已完成全量训练、等待回测，60 日模型及新融合回测将在其后更新。
 - 04 回测层的 Alphalens 和 Backtrader 已兼容 V2 单一 PIT 预测链，Backtrader 使用 Tushare ST 状态。
-- README 和分层设计文档已按当前 Tushare/V2 主链路同步。
+- 05 输出层已实现版本化正式 Alpha 发布、manifest 审计和 current 默认指针。
+- README 和分层设计文档已按当前 Tushare/V2/Alpha 发布主链路同步。
 
 ## 系统架构
 
@@ -32,7 +33,11 @@ Quarterly PIT V2 + LightGBM + Freeze 增量 + 多周期融合
    │
    ▼
 04 回测层
-Alphalens + Backtrader + 实盘调仓信号
+Alphalens + Backtrader + 验收报告
+   │
+   ▼
+05 输出层
+正式 Alpha release + manifest + current 指针
 ```
 
 | 模块 | 输入 | 核心处理 | 主要输出 |
@@ -41,6 +46,7 @@ Alphalens + Backtrader + 实盘调仓信号
 | 02 因子层 | Tushare 行情与财务原始层 | PIT 版本选择、TTM、去极值、中性化、标准化 | `02因子库/processed_data/` |
 | 03 模型训练层 | 行情宽表和 45 个因子 | Open-to-open 标签、季度固定模型、Freeze 增量、参数调优 | `03模型训练层/experiments/` |
 | 04 回测层 | 模型预测和行情 | IC 分析、交易成本、涨停/ST过滤、止损与调仓 | `04回测层/reports/` |
+| 05 输出层 | 已验收训练实验 | 字段标准化、完整性检查、版本化发布、来源审计 | `05输出层/exports/` |
 
 ## 核心设计
 
@@ -101,6 +107,10 @@ label(T) = open[T + horizon + 1] / open[T + 1] - 1
 │   ├── alphalens_analysis.py
 │   ├── backtrader.eval.py
 │   ├── utils.py
+│   └── README.md
+├── 05输出层/
+│   ├── publish_alpha.py
+│   ├── exports/
 │   └── README.md
 ├── assets/
 ├── docs/
@@ -164,8 +174,8 @@ python 02因子库/update_all.py
 
 ```powershell
 python 03模型训练层/main_train_v2.py `
-  --config configs/production/horizon20_profit20_tuned_.yaml `
-  --exp-id lgbm20_profit20_full `
+  --config horizon20_profit20_tuned_config.yaml `
+  --exp-id lgbm20_tushare_profit20 `
   --start-date 2020-01-01 `
   --freeze -y
 ```
@@ -174,7 +184,7 @@ python 03模型训练层/main_train_v2.py `
 
 ```text
 03模型训练层/configs/production/horizon5_profit20_tuned_config.yaml
-03模型训练层/configs/production/horizon60_profit20_tuned_.yaml
+03模型训练层/configs/production/horizon60_profit20_tuned_config.yaml
 ```
 
 `main_train_v2.py` 会将 V2 实验写入 `03模型训练层/experiments/{exp_id}_v2/`。
@@ -196,6 +206,18 @@ python 03模型训练层/fuse_predictions.py `
 python 04回测层/alphalens_analysis.py --exp-id <exp_id> --use-smooth
 python 04回测层/backtrader.eval.py --exp-id <exp_id> --use-smooth
 ```
+
+### 6. 发布正式 Alpha
+
+仅发布已经完成训练和回测验收的实验：
+
+```powershell
+python 05输出层/publish_alpha.py `
+  --exp-id lgbm20_tushare_profit20_v2 `
+  --release-id alpha_20d_tushare_profit20
+```
+
+正式输出保存在 `05输出层/exports/releases/{release_id}/`，`current.json` 自动指向最近一次成功发布的正式版本。
 
 ## 配置管理
 
@@ -235,6 +257,7 @@ python 04回测层/backtrader.eval.py --exp-id <exp_id> --use-smooth
 | 02 因子层 | [README](02因子库/README.md) | [设计](docs/02.1_设计原理与逻辑架构.md) | [工程](docs/02.2_工程实现与规范.md) | [运维](docs/02.3_运维与变更日志.md) |
 | 03 模型训练层 | [README](03模型训练层/README.md) | [设计](docs/03.1_设计原理与逻辑架构.md) | [工程](docs/03.2_工程实现与规范.md) | [运维](docs/03.3_运维与变更日志.md) |
 | 04 回测层 | [README](04回测层/README.md) | [设计](docs/04.1_设计原理与逻辑架构.md) | [工程](docs/04.2_工程实现与规范.md) | [运维](docs/04.3_运维与变更日志.md) |
+| 05 输出层 | [README](05输出层/README.md) | [设计](docs/05.1_设计原理与逻辑架构.md) | [工程](docs/05.2_工程实现与规范.md) | [运维](docs/05.3_运维与变更日志.md) |
 
 ## 路线图
 
@@ -243,7 +266,8 @@ python 04回测层/backtrader.eval.py --exp-id <exp_id> --use-smooth
 - [x] 45 个 Tushare 因子重建与迁移验收
 - [x] Quarterly PIT V2 与 Freeze 增量模式
 - [x] LightGBM V2 参数调优和 production 配置管理
-- [ ] 完成 Tushare 版 5d/20d/60d 全量训练
+- [x] 正式 Alpha 版本化发布与下游文件契约
+- [ ] 完成 Tushare 版 60d 全量训练（5d/20d 已完成）
 - [ ] 更新融合模型与回测基线
 - [ ] 将组合优化正式接入主链路
 - [ ] 增加统一依赖锁定和自动化测试
@@ -252,4 +276,4 @@ python 04回测层/backtrader.eval.py --exp-id <exp_id> --use-smooth
 ---
 
 *维护者：蒋大王*
-*最后更新：2026-07-30*
+*最后更新：2026-07-31*
