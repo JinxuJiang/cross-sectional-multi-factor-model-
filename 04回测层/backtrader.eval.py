@@ -43,7 +43,7 @@ from functools import lru_cache
 STRATEGY_PARAMS = {
     'stocks_per_batch': 20,           # 每次选股数量
     'start_date': datetime(2023, 10, 1),  # 回测开始日期
-    'end_date': datetime(2026, 6, 30),   # 回测结束日期
+    'end_date': datetime(2026, 7, 30),   # 回测结束日期
     'initial_cash': 50000,           # 初始资金
     'commission': 0.002               # 手续费率 (0.2%)
 }
@@ -68,7 +68,7 @@ DEFAULT_PATHS = {
 }
 
 # ST状态数据路径
-ST_STATUS_PATH = PROJECT_ROOT / '01数据' / 'data' / 'raw_data' / 'st_status.parquet'
+ST_STATUS_PATH = PROJECT_ROOT / '01数据' / 'data' / 'tushare_data' / 'st_status.parquet'
 
 
 @lru_cache(maxsize=1)
@@ -82,7 +82,7 @@ def load_st_status():
 def parse_args():
     parser = argparse.ArgumentParser(description='多因子回测脚本')
     parser.add_argument('--exp-id', '-e', type=str, default='exp_001',
-                        help='实验ID，如 test_001_v1')
+                        help='实验ID，如 lgbm20_profit20_full_v2')
     parser.add_argument('--use-smooth', action='store_true',
                         help='使用平滑后的预测 (smoothed_predictions.parquet)')
     return parser.parse_args()
@@ -94,11 +94,9 @@ def get_paths(exp_id, use_smooth=False):
     # 根据参数选择文件
     if use_smooth:
         paths['pred'] = str(exp_dir / 'smoothed_predictions.parquet')
-        paths['live_pred'] = str(exp_dir / 'smoothed_live_predictions.parquet')
         paths['pred_col'] = 'pred_score_smooth'
     else:
         paths['pred'] = str(exp_dir / 'predictions.parquet')
-        paths['live_pred'] = str(exp_dir / 'live_predictions.parquet')
         paths['pred_col'] = 'pred_score'
     
     return paths, exp_dir
@@ -131,24 +129,14 @@ def load_and_merge_data(paths):
     if not os.path.exists(paths['pred']):
         raise FileNotFoundError(f"找不到预测文件: {paths['pred']}")
     
-    prediction = pd.read_parquet(paths['pred'], columns=['date', 'stock_code', pred_col])
-    prediction = prediction.rename(columns={pred_col: 'pred_score'})
-    
-    # live文件可能不存在
-    if os.path.exists(paths['live_pred']):
-        live_prediction = pd.read_parquet(paths['live_pred'], columns=['date', 'stock_code', pred_col])
-        live_prediction = live_prediction.rename(columns={pred_col: 'pred_score'})
-    else:
-        print(f"  警告: 找不到live预测文件: {paths['live_pred']}")
-        live_prediction = pd.DataFrame(columns=['date', 'stock_code', 'pred_score'])
-    
-    pred_total = pd.concat([prediction, live_prediction], axis=0)
+    pred_total = pd.read_parquet(
+        paths['pred'],
+        columns=['date', 'stock_code', pred_col],
+    )
+    pred_total = pred_total.rename(columns={pred_col: 'pred_score'})
     pred_total = pred_total.rename(columns={'date': 'time', 'pred_score': 'prediction'})
     pred_total['time'] = pd.to_datetime(pred_total['time'])
     pred_total['prediction'] = pred_total['prediction'].astype('float32')
-    
-    del prediction, live_prediction
-    gc.collect()
 
     main_df = pred_total
     for col in ['open', 'close', 'high', 'low', 'volume']:

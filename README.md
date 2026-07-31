@@ -1,6 +1,6 @@
 # 截面多因子量化选股系统
 
-> 基于 Tushare、PIT 因子工程和 LightGBM Quarterly PIT V2 的 A 股截面选股系统，覆盖数据采集、因子构建、模型训练、预测融合、信号生成和策略回测。
+> 基于 Tushare、PIT 因子工程和 LightGBM Quarterly PIT V2 的 A 股截面选股系统，覆盖数据采集、因子构建、模型训练、预测融合和策略回测。
 
 ## 当前状态
 
@@ -10,8 +10,8 @@
 - 数据层和因子层已完成迁移验收，45 个因子已基于 Tushare 数据重建。
 - 模型训练层已统一到 Quarterly PIT V2，V1 Walk-forward 入口已退役。
 - 20 日 Tushare 模型正在进行全量训练；5 日、60 日模型及新融合回测将在其后更新。
-- 04 回测层的 Alphalens 已兼容 V2；Backtrader 和实盘信号脚本仍需完成 Tushare ST 路径及单一 PIT 预测链迁移。
-- README 已按当前代码主链路更新；`docs/` 下的分层设计文档仍需继续同步。
+- 04 回测层的 Alphalens 和 Backtrader 已兼容 V2 单一 PIT 预测链，Backtrader 使用 Tushare ST 状态。
+- README 和分层设计文档已按当前 Tushare/V2 主链路同步。
 
 ## 系统架构
 
@@ -100,7 +100,6 @@ label(T) = open[T + horizon + 1] / open[T + 1] - 1
 ├── 04回测层/
 │   ├── alphalens_analysis.py
 │   ├── backtrader.eval.py
-│   ├── generate_live_signals.py
 │   ├── utils.py
 │   └── README.md
 ├── assets/
@@ -196,12 +195,6 @@ python 03模型训练层/fuse_predictions.py `
 ```powershell
 python 04回测层/alphalens_analysis.py --exp-id <exp_id> --use-smooth
 python 04回测层/backtrader.eval.py --exp-id <exp_id> --use-smooth
-```
-
-生成最新实盘候选信号：
-
-```powershell
-python 04回测层/generate_live_signals.py --exp-id <exp_id>
 ```
 
 ## 配置管理

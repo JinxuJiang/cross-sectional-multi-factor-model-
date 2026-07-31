@@ -28,7 +28,7 @@ class MarketDataLoader:
     市场数据加载器
     
     功能：
-    1. 读取 raw_data/market_data/ 下的个股 parquet 文件
+    1. 读取 tushare_data/market_data/ 下的个股 parquet 文件
     2. 提取指定字段（open/high/low/close/volume/amount/preClose）
     3. 拼接成宽表（日期×股票）
     4. 保存到 processed_data/market_data/
@@ -36,7 +36,7 @@ class MarketDataLoader:
     参数：
     -----
     raw_data_path : str
-        原始数据路径，默认 '数据/data/raw_data/market_data/'
+        原始数据路径，默认 '01数据/data/tushare_data/market_data/'
     output_path : str
         输出路径，默认 '因子库/processed_data/market_data/'
     """
@@ -55,7 +55,7 @@ class MarketDataLoader:
         参数：
         -----
         raw_data_path : str, optional
-            原始数据路径，默认使用相对路径 '数据/data/raw_data/market_data/'
+            原始数据路径，默认使用 '01数据/data/tushare_data/market_data/'
         output_path : str, optional  
             输出路径，默认使用相对路径 '因子库/processed_data/market_data/'
         """

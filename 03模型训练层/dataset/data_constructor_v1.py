@@ -408,7 +408,9 @@ class DataConstructorV1:
         factor_values = {}
         for factor_name, factor_df in factor_data.items():
             if date in factor_df.index:
-                factor_values[factor_name] = factor_df.loc[date, listed_stocks]
+                # 行情股票池可能包含因子宽表尚未覆盖的新股。
+                # 使用 reindex 将缺失股票对齐为 NaN，随后交由因子完整度规则过滤。
+                factor_values[factor_name] = factor_df.loc[date].reindex(listed_stocks)
             else:
                 # 该日期无此因子数据
                 factor_values[factor_name] = pd.Series(index=listed_stocks, dtype=float)
@@ -635,13 +637,13 @@ if __name__ == "__main__":
         config = {
             'data': {
                 'factor_paths': {
-                    'technical': '02因子库/processed_data/technical_factors',
-                    'financial': '02因子库/processed_data/financial_factors'
+                    'technical': '02因子库/processed_data/factors/technical',
+                    'financial': '02因子库/processed_data/factors/financial'
                 },
                 'market_data_path': '02因子库/processed_data/market_data',
                 'price_column': 'close',
                 'open_column': 'open',
-                'st_status_path': '01数据/data/raw_data/st_status.parquet',
+                'st_status_path': '01数据/data/tushare_data/st_status.parquet',
                 'label': {
                     'horizon': 20,
                     'use_open_price': True  # V1新增

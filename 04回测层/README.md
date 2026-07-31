@@ -1,22 +1,17 @@
 # 04 回测层
 
-> 对模型预测进行 Alphalens 因子检验、Backtrader 策略回测，并生成候选调仓信号。
+> 对模型预测进行 Alphalens 因子检验和 Backtrader 策略回测。
 
 ## 当前迁移状态
 
-截至 2026-07-30，第四层尚未完全完成 Tushare/V2 迁移：
+截至 2026-07-31，第四层使用 V2 单一 PIT 预测链：
 
 | 组件 | 状态 | 说明 |
 |:---|:---|:---|
 | `alphalens_analysis.py` | 可用 | 直接读取 V2 的 `predictions.parquet` 或 `smoothed_predictions.parquet` |
-| `backtrader.eval.py` | 部分兼容 | 可读取 V2 主预测链，但 ST 路径仍指向旧 QMT `raw_data` |
-| `generate_live_signals.py` | 尚未兼容 V2 | 仍强制读取 V1 的 `live_predictions.parquet`，且 ST 路径仍为旧 QMT 数据 |
+| `backtrader.eval.py` | 可用 | 读取 V2 主预测链和 Tushare ST 状态 |
 
-因此，在完成第四层代码迁移前：
-
-- Alphalens 可以用于 Tushare V2 模型分析。
-- Backtrader 可以运行 V2 预测，但 ST 过滤仍使用旧数据，结果不能作为最终 Tushare 版验收。
-- `generate_live_signals.py` 不能直接用于 V2 实盘信号。
+V2 的 `predictions.parquet` 已覆盖最新无标签日期，不再生成或拼接独立的 `live_predictions.parquet`。
 
 ## 数据流
 
@@ -43,15 +38,11 @@
 04回测层/
 ├── alphalens_analysis.py
 ├── backtrader.eval.py
-├── backtrader_eval_有金额上限.py
-├── generate_live_signals.py
 ├── utils.py
 ├── 项目要求.md
 ├── reports/                    # 运行时生成，不进入Git
 └── README.md
 ```
-
-`backtrader_eval_有金额上限.py` 是独立实验版本，不是当前默认回测入口。
 
 ## Alphalens 分析
 
@@ -119,7 +110,7 @@ reports/{exp_id}/
 |:---|---:|
 | 每次持仓数量 | 20 |
 | 回测开始日期 | 2023-10-01 |
-| 回测结束日期 | 2026-06-30 |
+| 回测结束日期 | 2026-07-30 |
 | 初始资金 | 50,000 |
 | 手续费 | 0.2% |
 | 目标总仓位 | 90% |
@@ -157,7 +148,7 @@ python 04回测层/backtrader.eval.py `
   --use-smooth
 ```
 
-V2 不再生成 `live_predictions.parquet`。Backtrader 找不到该文件时只会打印警告，仍可使用主 `predictions.parquet` 继续运行。
+V2 不再生成 `live_predictions.parquet`；Backtrader 直接读取单一 PIT 主预测文件。
 
 ### 输出
 
@@ -171,58 +162,17 @@ reports/{exp_id}/
 
 当前默认脚本不会生成 `performance.json`。
 
-### 当前 ST 路径问题
-
-`backtrader.eval.py` 当前仍读取：
-
-```text
-01数据/data/raw_data/st_status.parquet
-```
-
-正式 Tushare 路径应为：
+### ST 状态路径
 
 ```text
 01数据/data/tushare_data/st_status.parquet
 ```
 
-在代码迁移完成前，旧文件存在会让回测继续运行，但 ST 状态只更新到旧 QMT 数据的截止日期，可能污染迁移后的回测结果。
+旧 `generate_live_signals.py` 和 `backtrader_eval_有金额上限.py` 已退出主链路并删除。
 
-## 实盘候选信号
+## 第四层待办
 
-脚本入口：
-
-```powershell
-python 04回测层/generate_live_signals.py `
-  --exp-id <exp_id> `
-  --top-n 20 `
-  --total-cash 100000 `
-  --date 2026-07-28
-```
-
-计划输出：
-
-```text
-reports/{exp_id}/live_signals_YYYYMMDD.csv
-```
-
-当前实际限制：
-
-- 强制读取 `predictions.parquet` 和 `live_predictions.parquet`。
-- V2 只有一条 PIT `predictions.parquet`，因此缺少 `live_predictions.parquet` 时脚本会失败。
-- 不支持 `--use-smooth`。
-- ST 路径仍指向旧 `raw_data`。
-- 最新预测日没有 T+1 行情时，无法提前判断下一交易日是否开盘涨停。
-
-在这些问题修复前，不应将该脚本用于 Tushare V2 的正式下单输入。
-
-## 第四层迁移待办
-
-- [ ] Backtrader ST 路径切换到 `tushare_data/st_status.parquet`。
-- [ ] 实盘信号脚本改为只读取 V2 单一 PIT 预测链。
-- [ ] 实盘信号脚本支持 `smoothed_predictions.parquet`。
-- [ ] 统一 Backtrader 与实盘信号的数据加载函数。
 - [ ] 将有效止损阈值的注释和日志统一为 20%。
-- [ ] 明确最新交易日涨停过滤只能在实际 T+1 开盘后判断。
 - [ ] 增加 V2 预测文件兼容性测试。
 - [ ] 完成 Tushare 三周期融合后的正式回测验收。
 
@@ -232,5 +182,5 @@ reports/{exp_id}/live_signals_YYYYMMDD.csv
 
 ---
 
-*最后更新：2026-07-30*
+*最后更新：2026-07-31*
 *维护者：蒋大王*
