@@ -4,13 +4,14 @@
 
 ## 当前状态
 
-截至 2026-07-31：
+截至 2026-08-01：
 
 - 正式训练入口为 `main_train_v2.py`。
 - V1 Walk-forward 入口、切分器和训练器已退役。
 - 5 日、20 日和 60 日正式配置统一放在 `configs/production/`。
 - LightGBM V2 调参和稳健性验证脚本已纳入本层。
-- Tushare 版 20 日和 5 日模型已完成全量训练，60 日模型尚待更新。
+- Tushare 版 5 日、20 日和 60 日模型均已完成 27 个季度的 Freeze 全量训练。
+- 三周期滞后 IC 融合已生成并完成回测与正式发布。
 
 `data_constructor_v1.py` 虽保留历史文件名，但仍是 V2 共用的数据构造器，不代表训练流程仍使用 V1。
 
@@ -330,8 +331,10 @@ python 03模型训练层/fuse_predictions.py `
 1. 按日期和股票代码取三个模型的共同样本。
 2. 每个模型每日做截面 Rank 标准化。
 3. 使用滞后的历史 IC 均值生成动态权重。
-4. 以 `base-idx` 模型的 horizon 作为权重滞后长度。
-5. 输出兼容回测层的 `predictions.parquet` 和 `smoothed_predictions.parquet`。
+4. 以 `base-idx` 模型的 `horizon + 1` 作为权重滞后长度；当前 20d 基准使用 21 个交易日。
+5. 输出兼容回测层的预测文件，并生成兼容 05 输出层的标准 `config.yaml`。
+
+融合实验的 `data.label.horizon` 取 `base-idx` 对应模型的 horizon。各输入实验可以使用不同 horizon，但标签公式和开盘价口径必须一致。
 
 融合输出：
 
@@ -339,8 +342,11 @@ python 03模型训练层/fuse_predictions.py `
 experiments/{output_exp}/
 ├── predictions.parquet
 ├── smoothed_predictions.parquet
+├── config.yaml
 └── fusion_config.yaml
 ```
+
+`config.yaml` 供回测层和输出层读取；`fusion_config.yaml` 保存来源实验、IC 滞后和最终权重明细。
 
 ## 防泄漏检查清单
 
@@ -354,13 +360,11 @@ experiments/{output_exp}/
 
 ## 后续工作
 
-- 完成 Tushare 版 60d 全量训练。
-- 对比迁移前后的预测覆盖、Rank IC 和因子重要性。
-- 完成新三周期融合与回测。
-- 将训练结果和验收结论写入运维文档。
+- 按月使用 Freeze 模式追加新交易日预测。
+- 持续比较单模型与融合模型的近期回撤和 Top20 稳定性。
 - 增加可自动执行的最小训练与 Freeze 回归测试。
 
 ---
 
-*最后更新：2026-07-31*
+*最后更新：2026-08-01*
 *维护者：蒋大王*

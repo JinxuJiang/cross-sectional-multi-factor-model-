@@ -15,15 +15,12 @@
     - 输出一条融合后的 `predictions.parquet` 和 `smoothed_predictions.parquet`。
 
 常用命令：
-    python fuse_predictions.py \
-        --exps qv2_5d_full_v2 qv2_20d_full_v2 qv2_60d_full_v2 \
-        --base-idx 1 \
-        --output-exp qv2_ensemble_5d_20d_60d
+    python fuse_predictions.py --exps lgbm5_tushare_profit20_v2 lgbm20_tushare_profit20_v2 lgbm60_tushare_profit20_v2 --base-idx 1 --output-exp ensemble_5d_20d_60d_profit20_v2
 
 参数说明：
     --exps          输入模型实验ID列表，按顺序排列，索引从0开始
-    --base-idx      基准模型索引；决定 IC 权重滞后天数 lag
-                    lag = 基准模型 horizon，用于避免使用尚未兑现的收益计算权重
+    --base-idx      基准模型索引；决定统一 IC 收益口径和权重滞后天数
+                    lag = 基准模型 horizon + 1，用于避免使用尚未兑现的收益计算权重
     --output-exp    融合后实验ID
 
 输入：
@@ -33,10 +30,13 @@
     03模型训练层/experiments/{output_exp}/
         predictions.parquet
         smoothed_predictions.parquet
+        config.yaml
         fusion_config.yaml
 
 说明：
     输出的 `pred_score` 和 `pred_score_smooth` 都是融合后的 rank 分数。
+    `config.yaml` 是回测层和输出层读取的标准实验配置，其中 horizon 取基准模型 horizon。
+    `fusion_config.yaml` 保存完整的来源模型、滞后参数和最终权重。
     为了兼容现有回测，推荐继续使用：
         python backtrader.eval.py --exp-id {output_exp} --use-smooth
 """
@@ -64,7 +64,10 @@ def parse_args():
         "--base-idx",
         type=int,
         default=0,
-        help="基准模型索引，决定IC权重滞后天数 lag=base_model_horizon；推荐20d模型索引",
+        help=(
+            "基准模型索引，决定统一IC收益口径和权重滞后天数 "
+            "lag=base_model_horizon+1；推荐20d模型索引"
+        ),
     )
     parser.add_argument("--output-exp", required=True, help="输出实验ID，如 qv2_ensemble_5d_20d_60d")
     return parser.parse_args()
@@ -76,8 +79,30 @@ def load_model_config(exp_dir: Path) -> Dict:
         raise FileNotFoundError(f"配置不存在: {config_path}")
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    horizon = config.get("data", {}).get("label", {}).get("horizon", 20)
-    return {"horizon": horizon}
+    label_config = config.get("data", {}).get("label", {})
+    horizon = label_config.get("horizon")
+    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+        raise ValueError(f"{config_path} 缺少有效的 data.label.horizon")
+    return {
+        "horizon": horizon,
+        "label_formula": label_config.get("formula", "forward_return"),
+        "use_open_price": bool(label_config.get("use_open_price", False)),
+    }
+
+
+def validate_label_timing(models_data: List[Dict]) -> None:
+    """融合模型允许 horizon 不同，但标签公式和交易时点必须一致。"""
+    signatures = {
+        (model["label_formula"], model["use_open_price"])
+        for model in models_data
+    }
+    if len(signatures) > 1:
+        details = ", ".join(
+            f"{model['exp_id']}="
+            f"{model['label_formula']}/use_open_price={model['use_open_price']}"
+            for model in models_data
+        )
+        raise ValueError(f"输入实验的标签口径不一致，禁止融合: {details}")
 
 
 def load_model_data(exp_dir: Path) -> pd.DataFrame:
@@ -96,13 +121,22 @@ def load_model_data(exp_dir: Path) -> pd.DataFrame:
     return df
 
 
-def merge_with_intersection(dfs: List[pd.DataFrame], value_col: str = "pred_score_smooth") -> pd.DataFrame:
-    """按 date + stock_code 取所有模型交集。actual_return 使用第一个模型口径。"""
+def merge_with_intersection(
+    dfs: List[pd.DataFrame],
+    value_col: str = "pred_score_smooth",
+    base_idx: int = 0,
+) -> pd.DataFrame:
+    """按 date + stock_code 取交集，并使用基准模型的 actual_return 作为统一 IC 口径。"""
+    if not dfs:
+        raise ValueError("至少需要一个模型进行融合")
+    if base_idx < 0 or base_idx >= len(dfs):
+        raise ValueError(f"base_idx 超出范围: {base_idx}, 模型数量={len(dfs)}")
+
     prepared = []
     for i, df in enumerate(dfs):
         keep_cols = ["date", "stock_code", value_col]
         extra_cols = []
-        if i == 0:
+        if i == base_idx:
             for col in ["actual_return", "is_evaluable", "model_period", "fold_id"]:
                 if col in df.columns:
                     extra_cols.append(col)
@@ -114,7 +148,7 @@ def merge_with_intersection(dfs: List[pd.DataFrame], value_col: str = "pred_scor
     merged = prepared[0]
     for i in range(1, len(prepared)):
         merged = merged.merge(
-            prepared[i][["date", "stock_code", f"pred_{i}"]],
+            prepared[i],
             on=["date", "stock_code"],
             how="inner",
         )
@@ -150,6 +184,7 @@ def calc_daily_ic(df: pd.DataFrame, n_models: int) -> pd.DataFrame:
 def calc_lagged_weights(daily_ic: pd.DataFrame, lag: int) -> pd.DataFrame:
     """
     第 t 天权重只使用 t-lag 及以前的 IC。
+    对 open[T+horizon+1] / open[T+1] 标签，lag 应为 horizon + 1。
     若历史正IC不足，则使用等权。
     """
     n_models = len([c for c in daily_ic.columns if c.startswith("ic_")])
@@ -198,28 +233,29 @@ def fuse_with_weights(df: pd.DataFrame, weights_df: pd.DataFrame, n_models: int)
     return out[ordered_cols].sort_values(["date", "stock_code"]).reset_index(drop=True)
 
 
-def save_fusion_config(
+def save_fusion_configs(
     output_dir: Path,
     models_data: List[Dict],
     lag: int,
     final_weights: pd.Series,
     base_idx: int,
 ):
-    config = {
+    timestamp = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    fusion_config = {
         "fusion_info": {
             "mode": "quarterly_pit_v2",
             "n_models": len(models_data),
             "base_model": models_data[base_idx]["exp_id"],
             "base_model_index": base_idx,
             "ic_lag": lag,
-            "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": timestamp,
         },
         "models": [],
         "final_weights": {},
     }
 
     for i, model in enumerate(models_data):
-        config["models"].append(
+        fusion_config["models"].append(
             {
                 "index": i,
                 "exp_id": model["exp_id"],
@@ -229,12 +265,46 @@ def save_fusion_config(
                 "final_weight": float(final_weights.iloc[i]),
             }
         )
-        config["final_weights"][f"model_{i}"] = float(final_weights.iloc[i])
+        fusion_config["final_weights"][f"model_{i}"] = float(final_weights.iloc[i])
 
-    config_path = output_dir / "fusion_config.yaml"
-    with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-    print(f"\n[配置已保存] {config_path}")
+    fusion_config_path = output_dir / "fusion_config.yaml"
+    with open(fusion_config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(fusion_config, f, sort_keys=False, allow_unicode=True)
+
+    base_model = models_data[base_idx]
+    standard_config = {
+        "data": {
+            "label": {
+                "formula": base_model["label_formula"],
+                "horizon": base_model["horizon"],
+                "use_open_price": base_model["use_open_price"],
+            }
+        },
+        "model": {
+            "name": "weighted_rank_fusion",
+            "params": {
+                "score_type": "daily_cross_section_rank",
+                "weight_method": "lagged_positive_mean_ic",
+            },
+        },
+        "output": {
+            "predictions_filename": "predictions.parquet",
+        },
+        "fusion_metadata": {
+            "generated_at": timestamp,
+            "config_file": "fusion_config.yaml",
+            "base_model": base_model["exp_id"],
+            "base_model_index": base_idx,
+            "source_experiments": [model["exp_id"] for model in models_data],
+            "ic_lag": lag,
+        },
+    }
+    standard_config_path = output_dir / "config.yaml"
+    with open(standard_config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(standard_config, f, sort_keys=False, allow_unicode=True)
+
+    print(f"\n[标准配置已保存] {standard_config_path}")
+    print(f"[融合明细已保存] {fusion_config_path}")
 
 
 def main():
@@ -263,21 +333,26 @@ def main():
             f"  {exp_id}: horizon={model_config['horizon']}, "
             f"{df['date'].min().date()} ~ {df['date'].max().date()}, rows={len(df)}"
         )
-        models_data.append({"exp_id": exp_id, "horizon": model_config["horizon"], "df": df})
+        models_data.append({"exp_id": exp_id, **model_config, "df": df})
 
     n_models = len(models_data)
+    validate_label_timing(models_data)
 
     print("\n[2/6] 合并数据（date+stock交集）...")
-    merged = merge_with_intersection([m["df"] for m in models_data])
+    merged = merge_with_intersection(
+        [m["df"] for m in models_data],
+        base_idx=args.base_idx,
+    )
     print(f"  交集后: rows={len(merged)}, dates={merged['date'].nunique()}")
     print(f"  日期范围: {merged['date'].min().date()} ~ {merged['date'].max().date()}")
+    print(f"  IC收益口径: {models_data[args.base_idx]['exp_id']} 的 actual_return")
 
     print("\n[3/6] 每日截面rank标准化...")
     merged = rank_standardize(merged, n_models)
 
     print("\n[4/6] 计算每日IC和滞后权重...")
     daily_ic = calc_daily_ic(merged, n_models)
-    lag = models_data[args.base_idx]["horizon"]
+    lag = models_data[args.base_idx]["horizon"] + 1
     weights = calc_lagged_weights(daily_ic, lag=lag)
     for i, model in enumerate(models_data):
         print(f"  Model {i} ({model['exp_id']}): mean IC={daily_ic[f'ic_{i}'].mean():.4f}")
@@ -295,7 +370,7 @@ def main():
 
     print("\n[6/6] 保存融合配置...")
     last_weights = weights[[f"weight_{i}" for i in range(n_models)]].iloc[-1]
-    save_fusion_config(output_dir, models_data, lag, last_weights, args.base_idx)
+    save_fusion_configs(output_dir, models_data, lag, last_weights, args.base_idx)
 
     print("\n" + "=" * 70)
     print("融合完成")
@@ -305,4 +380,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

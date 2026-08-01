@@ -4,12 +4,13 @@
 
 ## 当前状态
 
-截至 2026-07-31：
+截至 2026-08-01：
 
 - 01 数据层、02 因子层和 03 模型训练层已由 QMT 迁移至 Tushare，旧 QMT 数据仅保留作历史对照。
 - 数据层和因子层已完成迁移验收，45 个因子已基于 Tushare 数据重建。
 - 模型训练层已统一到 Quarterly PIT V2，V1 Walk-forward 入口已退役。
-- 20 日 Tushare 模型已完成训练和回测；5 日模型已完成全量训练、等待回测，60 日模型及新融合回测将在其后更新。
+- 5 日、20 日和 60 日 Tushare 模型均已完成全量 Freeze 训练、Alphalens 与 Backtrader 回测。
+- 5d/20d/60d 滞后 IC 融合实验已完成回测，并与三个单模型一同发布为正式 Alpha。
 - 04 回测层的 Alphalens 和 Backtrader 已兼容 V2 单一 PIT 预测链，Backtrader 使用 Tushare ST 状态。
 - 05 输出层已实现版本化正式 Alpha 发布、manifest 审计和 current 默认指针。
 - README 和分层设计文档已按当前 Tushare/V2/Alpha 发布主链路同步。
@@ -198,6 +199,8 @@ python 03模型训练层/fuse_predictions.py `
   --output-exp <ensemble_exp_id>
 ```
 
+融合结果会生成标准 `config.yaml`，通过回测验收后可直接使用 05 输出层发布；其 horizon 取 `base-idx` 对应模型。
+
 融合以 20 日模型为基准标签，权重只使用当时已经可知的历史 IC。
 
 ### 5. 分析与回测
@@ -230,7 +233,34 @@ python 05输出层/publish_alpha.py `
 
 调参结果晋升到 `production/` 后，正式运行应使用 production 配置；不要直接修改调参结果目录中的原始文件。
 
-## 历史回测基线
+## 正式回测结果与历史基线
+
+当前 Tushare 正式实验统一使用 2023-10-09 至 2026-07-28 的 Backtrader 回测区间：
+
+| 指标 | 60d 单模型 | 5d/20d/60d 融合 |
+|:---|---:|---:|
+| Rank IC | 0.0851 | 0.1053 |
+| IR | 0.7409 | 0.8702 |
+| 累计收益 | 46.79% | 50.08% |
+| 年化收益 | 15.26% | 16.21% |
+| 最大回撤 | 26.82% | 27.66% |
+| 夏普比率 | 0.51 | 0.52 |
+
+不同 horizon 的 IC 对应各自标签口径，不宜只凭 IC 横向判断交易表现。融合全期收益略高，但 2026 年近期回撤和利润回吐大于 60d，正式使用时仍需结合风险偏好选择默认 release。
+
+### 当前 Tushare 正式结果
+
+![60d Rank IC](./assets/performance/lgbm60_tushare_profit20_v2/ic_analysis_smooth.png)
+
+![60d 净值](./assets/performance/lgbm60_tushare_profit20_v2/equity_curve.png)
+
+![三周期融合 Rank IC](./assets/performance/ensemble_5d_20d_60d_profit20_v2/ic_analysis_smooth.png)
+
+![三周期融合净值](./assets/performance/ensemble_5d_20d_60d_profit20_v2/equity_curve.png)
+
+完整展示产物保存在 `assets/performance/lgbm60_tushare_profit20_v2/` 和 `assets/performance/ensemble_5d_20d_60d_profit20_v2/`。
+
+### 迁移前历史基线
 
 仓库中的展示图表来自数据源迁移前的 5d/20d/60d 融合实验，用于保留历史比较基线，不代表当前 Tushare 重训结果。
 
@@ -247,7 +277,7 @@ python 05输出层/publish_alpha.py `
 
 ![历史融合模型净值](./assets/performance/ensemble_5d_20d_60d_v1/equity_curve.png)
 
-待 Tushare 版 5 日、20 日、60 日模型全部训练并完成融合回测后，再更新本节的正式结果。
+迁移前图表仅用于历史对照，不代表当前 Tushare 正式结果。
 
 ## 文档导航
 
@@ -267,8 +297,8 @@ python 05输出层/publish_alpha.py `
 - [x] Quarterly PIT V2 与 Freeze 增量模式
 - [x] LightGBM V2 参数调优和 production 配置管理
 - [x] 正式 Alpha 版本化发布与下游文件契约
-- [ ] 完成 Tushare 版 60d 全量训练（5d/20d 已完成）
-- [ ] 更新融合模型与回测基线
+- [x] 完成 Tushare 版 5d/20d/60d 全量训练与回测
+- [x] 更新三周期融合模型、回测基线和正式 release
 - [ ] 将组合优化正式接入主链路
 - [ ] 增加统一依赖锁定和自动化测试
 - [ ] MLOps 实验与模型版本管理
@@ -276,4 +306,4 @@ python 05输出层/publish_alpha.py `
 ---
 
 *维护者：蒋大王*
-*最后更新：2026-07-31*
+*最后更新：2026-08-01*

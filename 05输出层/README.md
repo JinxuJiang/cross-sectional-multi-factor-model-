@@ -23,6 +23,8 @@ python 05输出层\publish_alpha.py --exp-id lgbm20_tushare_profit20_v2 --releas
 03模型训练层/experiments/{exp_id}/config.yaml
 ```
 
+`exp_id` 可以是单模型实验，也可以是 `fuse_predictions.py` 生成的融合实验。融合 Alpha 的 `horizon_days` 采用融合时 `base-idx` 对应模型的 horizon。
+
 每次发布会创建一个不可覆盖的 release，并自动更新 `current.json`：
 
 ```text

@@ -8,7 +8,7 @@
     转换为供后续组合仓库读取的标准截面 Alpha。
 
 常用命令：
-    python publish_alpha.py --exp-id lgbm20_tushare_profit20_v2 --release-id alpha_20d_tushare_profit20_20260728_v1
+    python publish_alpha.py --exp-id lgbm20_tushare_profit20_v2 --release-id alpha_20d_tushare_profit20
 
 输出：
     exports/releases/{release_id}/
