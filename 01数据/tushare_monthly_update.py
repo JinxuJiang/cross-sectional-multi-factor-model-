@@ -8,13 +8,14 @@ Tushare 月度数据更新模块
 更新策略:
 ---------
 1. 元数据: 全量重抓（股票列表、交易日历会变化，成本低）
-2. 行情: 只抓缺失交易日 + 全量重建 per-stock 文件
+2. 基准: 全量刷新中证1000指数日行情
+3. 行情: 只抓缺失交易日 + 全量重建 per-stock 文件
    - 原因: 等比前复权因子随分红除权漂移，历史价格需整体修正
-3. 财务: 重抓最近 8 个季度分区（--overwrite 原子替换）
+4. 财务: 重抓最近 8 个季度分区（--overwrite 原子替换）
    - 原因: 年报披露可拖至次年 4 月底，且公司可能发布跨年业绩修正
-4. 状态: 只抓缺失交易日 + 重建宽表
-5. 总验证: 行情覆盖 / 财务分区 / 状态宽表 / 元数据完整性
-6. 更新日志
+5. 状态: 只抓缺失交易日 + 重建宽表
+6. 总验证: 行情覆盖 / 财务分区 / 状态宽表 / 元数据完整性
+7. 更新日志
 
 使用方法:
 ---------
@@ -68,16 +69,22 @@ class MonthlyTushareUpdater(TushareDataEngine):
         print("=" * 60)
         self.download_metadata(end_date=end)
 
-        # 2. 行情 - 缺失补齐 + 全量重建（前复权漂移）
+        # 2. 回测基准 - 数据量小，直接全量刷新
         print("\n" + "=" * 60)
-        print("📈 步骤2: 更新行情数据（缺失补齐 + 全量重建）")
+        print("📉 步骤2: 更新中证1000基准指数")
+        print("=" * 60)
+        self.download_benchmark_index(start_date="20100101", end_date=end)
+
+        # 3. 行情 - 缺失补齐 + 全量重建（前复权漂移）
+        print("\n" + "=" * 60)
+        print("📈 步骤3: 更新行情数据（缺失补齐 + 全量重建）")
         print("=" * 60)
         self.download_market_data(start_date="20100101", end_date=end,
                                   missing_only=True, build=True)
 
-        # 3. 财务 - 重抓最近 N 个季度分区（覆盖披露季补全与业绩修正）
+        # 4. 财务 - 重抓最近 N 个季度分区（覆盖披露季补全与业绩修正）
         print("\n" + "=" * 60)
-        print(f"📊 步骤3: 更新财务数据（重抓最近 {financial_lookback_quarters} 个季度）")
+        print(f"📊 步骤4: 更新财务数据（重抓最近 {financial_lookback_quarters} 个季度）")
         print("=" * 60)
         all_periods = self.quarter_periods("20100331", end)
         recent_periods = all_periods[-financial_lookback_quarters:]
@@ -86,22 +93,22 @@ class MonthlyTushareUpdater(TushareDataEngine):
                                          end_period=recent_periods[-1],
                                          overwrite=True)
 
-        # 4. 状态 - 缺失补齐 + 重建宽表
+        # 5. 状态 - 缺失补齐 + 重建宽表
         print("\n" + "=" * 60)
-        print("🚨 步骤4: 更新状态数据（缺失补齐 + 重建宽表）")
+        print("🚨 步骤5: 更新状态数据（缺失补齐 + 重建宽表）")
         print("=" * 60)
         self.download_status_data(start_date="20100101", end_date=end,
                                   missing_only=True, build=True)
 
-        # 5. 总验证 - 行情覆盖 / 财务分区 / 状态宽表 / 元数据
+        # 6. 总验证 - 行情覆盖 / 财务分区 / 状态宽表 / 元数据
         print("\n" + "=" * 60)
-        print("✔️ 步骤5: 总验证")
+        print("✔️ 步骤6: 总验证")
         print("=" * 60)
         report = self.validate_all(end_date=end)
         n_fail = report["summary"]["fail"]
         n_warn = report["summary"]["warn"]
 
-        # 6. 记录更新日志
+        # 7. 记录更新日志
         self._save_update_log(n_fail=n_fail, n_warn=n_warn)
 
         print("\n" + "=" * 60)

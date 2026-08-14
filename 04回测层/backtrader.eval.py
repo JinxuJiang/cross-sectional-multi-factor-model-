@@ -43,7 +43,7 @@ from functools import lru_cache
 STRATEGY_PARAMS = {
     'stocks_per_batch': 20,           # 每次选股数量
     'start_date': datetime(2023, 10, 1),  # 回测开始日期
-    'end_date': datetime(2026, 7, 30),   # 回测结束日期
+    'end_date': None,                 # 自动取预测与行情共同覆盖的最新日期
     'initial_cash': 50000,           # 初始资金
     'commission': 0.002               # 手续费率 (0.2%)
 }
@@ -69,6 +69,16 @@ DEFAULT_PATHS = {
 
 # ST状态数据路径
 ST_STATUS_PATH = PROJECT_ROOT / '01数据' / 'data' / 'tushare_data' / 'st_status.parquet'
+TRADE_SCHEDULE_PATH = (
+    PROJECT_ROOT / '01数据' / 'data' / 'tushare_data' / 'raw' / 'metadata'
+    / 'trade_schedule.parquet'
+)
+BENCHMARK_PATH = (
+    PROJECT_ROOT / '01数据' / 'data' / 'tushare_data' / 'benchmark'
+    / '000852.SH.parquet'
+)
+BENCHMARK_NAME = '中证1000'
+BENCHMARK_PLOT_NAME = 'CSI 1000'
 
 
 @lru_cache(maxsize=1)
@@ -78,6 +88,111 @@ def load_st_status():
         print(f"  警告: 找不到ST状态文件: {ST_STATUS_PATH}")
         return None
     return pd.read_parquet(ST_STATUS_PATH)
+
+
+def load_month_end_dates(start_date, end_date, available_dates):
+    """从正式交易安排中取得区间内每月最后一个交易日。"""
+    if not TRADE_SCHEDULE_PATH.exists():
+        raise FileNotFoundError(
+            f"缺少完整交易安排: {TRADE_SCHEDULE_PATH}\n"
+            "请先运行: python 01数据/tushare_data_main.py --monthly"
+        )
+    calendar = pd.read_parquet(TRADE_SCHEDULE_PATH)
+    required = {'cal_date', 'is_open'}
+    if not required.issubset(calendar.columns):
+        raise ValueError(f"交易安排缺少字段: {sorted(required - set(calendar.columns))}")
+
+    calendar = calendar.copy()
+    calendar['date'] = pd.to_datetime(
+        calendar['cal_date'].astype(str), format='%Y%m%d', errors='coerce'
+    )
+    open_days = calendar.loc[calendar['is_open'].astype(int).eq(1), 'date'].dropna()
+    month_ends = open_days.groupby(open_days.dt.to_period('M')).max().sort_values()
+
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+    available = pd.DatetimeIndex(available_dates).normalize().unique()
+    scheduled = pd.DatetimeIndex(month_ends[(month_ends >= start) & (month_ends <= end)])
+    missing = scheduled.difference(available)
+    if len(missing):
+        print(
+            "  警告: 以下月末交易日没有预测/行情，跳过: "
+            + ", ".join(d.strftime('%Y-%m-%d') for d in missing)
+        )
+    return sorted(scheduled.intersection(available).tolist())
+
+
+def load_week_end_dates(start_date, end_date, available_dates):
+    """从正式交易安排中取得每周最后一个实际交易日。"""
+    if not TRADE_SCHEDULE_PATH.exists():
+        raise FileNotFoundError(
+            f"缺少完整交易安排: {TRADE_SCHEDULE_PATH}\n"
+            "请先运行: python 01数据/tushare_data_main.py --monthly"
+        )
+    calendar = pd.read_parquet(TRADE_SCHEDULE_PATH)
+    required = {'cal_date', 'is_open'}
+    if not required.issubset(calendar.columns):
+        raise ValueError(f"交易安排缺少字段: {sorted(required - set(calendar.columns))}")
+
+    calendar = calendar.copy()
+    calendar['date'] = pd.to_datetime(
+        calendar['cal_date'].astype(str), format='%Y%m%d', errors='coerce'
+    )
+    open_days = calendar.loc[calendar['is_open'].astype(int).eq(1), 'date'].dropna()
+    week_ends = open_days.groupby(open_days.dt.to_period('W-FRI')).max().sort_values()
+
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+    available = pd.DatetimeIndex(available_dates).normalize().unique()
+    scheduled = pd.DatetimeIndex(week_ends[(week_ends >= start) & (week_ends <= end)])
+    missing = scheduled.difference(available)
+    if len(missing):
+        print(
+            "  警告: 以下周末交易日没有预测/行情，跳过: "
+            + ", ".join(d.strftime('%Y-%m-%d') for d in missing)
+        )
+    return sorted(scheduled.intersection(available).tolist())
+
+
+def load_benchmark(start_date, end_date):
+    """加载中证1000收盘价并计算用于展示的净值与指标。"""
+    if not BENCHMARK_PATH.exists():
+        raise FileNotFoundError(
+            f"缺少中证1000基准行情: {BENCHMARK_PATH}\n"
+            "请先运行: python 01数据/tushare_data_main.py --monthly"
+        )
+    benchmark = pd.read_parquet(BENCHMARK_PATH)
+    if not {'trade_date', 'close'}.issubset(benchmark.columns):
+        raise ValueError("中证1000基准行情缺少 trade_date/close 字段")
+    benchmark = benchmark[['trade_date', 'close']].copy()
+    benchmark.index = pd.to_datetime(
+        benchmark.pop('trade_date').astype(str), format='%Y%m%d', errors='coerce'
+    )
+    benchmark['close'] = pd.to_numeric(benchmark['close'], errors='coerce')
+    close = benchmark['close'].dropna().sort_index()
+    close = close[~close.index.duplicated(keep='last')]
+    close = close.loc[(close.index >= pd.Timestamp(start_date)) &
+                      (close.index <= pd.Timestamp(end_date))]
+    if close.empty:
+        raise ValueError("回测区间内没有中证1000基准行情")
+
+    nav = close / close.iloc[0]
+    returns = close.pct_change().dropna()
+    years = max((close.index[-1] - close.index[0]).days / 365.25, 1 / 252)
+    total_return = nav.iloc[-1] - 1
+    ann_return = (1 + total_return) ** (1 / years) - 1
+    ann_vol = returns.std(ddof=1) * np.sqrt(252) if len(returns) > 1 else np.nan
+    sharpe = ((returns.mean() * 252 - 0.02) / ann_vol
+              if pd.notna(ann_vol) and ann_vol > 0 else np.nan)
+    drawdown = nav / nav.cummax() - 1
+    metrics = {
+        'total_return': total_return * 100,
+        'ann_return': ann_return * 100,
+        'ann_vol': ann_vol * 100 if pd.notna(ann_vol) else np.nan,
+        'sharpe': sharpe,
+        'max_dd': abs(drawdown.min()) * 100,
+    }
+    return nav, metrics
 
 def parse_args():
     parser = argparse.ArgumentParser(description='多因子回测脚本')
@@ -137,6 +252,7 @@ def load_and_merge_data(paths):
     pred_total = pred_total.rename(columns={'date': 'time', 'pred_score': 'prediction'})
     pred_total['time'] = pd.to_datetime(pred_total['time'])
     pred_total['prediction'] = pred_total['prediction'].astype('float32')
+    prediction_end = pred_total['time'].max()
 
     main_df = pred_total
     for col in ['open', 'close', 'high', 'low', 'volume']:
@@ -154,17 +270,28 @@ def load_and_merge_data(paths):
     main_df['stock_code'] = main_df['stock_code'].astype('category')
     
     main_df = main_df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
+    common_end = main_df.index.max()
+    if pd.isna(common_end):
+        raise ValueError('预测与行情没有可共同使用的日期')
+    main_df.attrs['prediction_end'] = prediction_end
+    main_df.attrs['common_end'] = common_end
     
     print(f"完成数据合并，形状: {main_df.shape}")
     print(f"数据时间范围: {main_df.index.min()} ~ {main_df.index.max()}")
+    if common_end < prediction_end:
+        print(
+            f"警告: 预测最新日期为 {prediction_end:%Y-%m-%d}，但行情仅共同覆盖到 "
+            f"{common_end:%Y-%m-%d}；回测将使用共同截止日"
+        )
     return main_df
 
 # ==========================================
 # 3. 信号生成模块
 # ==========================================
-def generate_signals(df, top_n, start_date, end_date):
+def generate_signals(df, top_n, start_date, end_date,
+                     rebalance_frequency='monthly_last'):
     """
-    生成调仓信号（每月第一个交易日调仓）
+    生成调仓信号（信号日收盘生成，下一交易日开盘成交）
     
     返回:
         buy_dict: 买入信号字典 {date: [stock_list]}
@@ -172,7 +299,7 @@ def generate_signals(df, top_n, start_date, end_date):
         all_held_stocks: 所有持有过的股票列表
         rebalance_records: 详细的调仓记录列表（用于导出CSV）
     """
-    mask = (df.index >= pd.to_datetime(start_date) - pd.Timedelta(days=5)) & \
+    mask = (df.index >= pd.to_datetime(start_date) - pd.Timedelta(days=45)) & \
            (df.index <= pd.to_datetime(end_date) + pd.Timedelta(days=5))
     df_period = df.loc[mask].copy()
     
@@ -186,16 +313,21 @@ def generate_signals(df, top_n, start_date, end_date):
     if not trading_days:
         return {}, {}, []
     
-    # 找到每月第一个交易日（固定调仓日，避免幸运日问题）
-    rebalance_dates = []
-    current_month = None
-    for date in trading_days:
-        if date >= pd.to_datetime(start_date) and date <= pd.to_datetime(end_date):
-            if date.month != current_month:
-                rebalance_dates.append(date)
-                current_month = date.month
+    # 使用官方交易安排识别周期末，不能把尚未结束周期的最新数据日误判为调仓日。
+    if rebalance_frequency == 'weekly_last':
+        rebalance_dates = load_week_end_dates(
+            start_date, end_date, available_dates=trading_days
+        )
+        frequency_text = '每周最后一个交易日'
+    elif rebalance_frequency == 'monthly_last':
+        rebalance_dates = load_month_end_dates(
+            start_date, end_date, available_dates=trading_days
+        )
+        frequency_text = '每月最后一个交易日'
+    else:
+        raise ValueError(f"不支持的调仓频率: {rebalance_frequency}")
     
-    print(f"\n--- 步骤2: 生成调仓信号（每月首个交易日，已加入ST过滤） ---")
+    print(f"\n--- 步骤2: 生成调仓信号（{frequency_text}，已加入ST过滤） ---")
     print(f"回测范围内总交易日: {len(trading_days)}, 计划调仓次数: {len(rebalance_dates)}")
     if rebalance_dates:
         print(f"首个调仓日: {rebalance_dates[0].strftime('%Y-%m-%d')}")
@@ -242,9 +374,8 @@ def generate_signals(df, top_n, start_date, end_date):
         if current_slice.empty:
             continue
         
-        # 3. 【新增】过滤数据不足20天的股票（与run_backtest一致）
-        start_date_ts = pd.to_datetime(start_date)
-        hist_data = df_period[df_period.index >= start_date_ts]
+        # 3. 只用截至信号日的历史，过滤有效数据不足20天的股票。
+        hist_data = df_period[df_period.index <= date]
         stock_data_counts = hist_data.groupby('stock_code', observed=True).size()
         valid_stocks_20d = stock_data_counts[stock_data_counts >= 20].index.tolist()
         before_count = len(current_slice)
@@ -256,52 +387,9 @@ def generate_signals(df, top_n, start_date, end_date):
         if current_slice.empty:
             continue
         
-        # 4. 获取T+1日数据，过滤开盘涨停的
-        future_dates = df_period[df_period.index > date].index.unique()
-        
-        if len(future_dates) == 0:
-            # 没有T+1数据（最后一天/最新数据），直接按T日选股结果下单，不过滤
-            print(f"  {date_str}: 警告-无T+1数据，不进行开盘涨停过滤，直接按选股结果下单")
-            tradable = current_slice
-        else:
-            next_date = future_dates[0]
-            
-            try:
-                # 获取T+1的数据
-                next_day_df = df_period.loc[next_date]
-                if isinstance(next_day_df, pd.Series):
-                    next_day_df = next_day_df.to_frame().T
-                
-                # 合并T日和T+1日的数据（按stock_code）
-                # 先重命名列避免冲突
-                current_renamed = current_slice[['stock_code', 'close']].rename(columns={'close': 'close_t'})
-                next_renamed = next_day_df[['stock_code', 'open']].rename(columns={'open': 'open_t1'})
-                
-                merged = current_renamed.merge(next_renamed, on='stock_code')
-                
-                if len(merged) > 0:
-                    # 计算开盘涨幅
-                    merged['open_return'] = merged['open_t1'] / merged['close_t'] - 1
-                    
-                    # 过滤开盘涨停（>=9.9%）的
-                    tradable_stocks = merged.loc[merged['open_return'] < 0.099, 'stock_code']
-                    tradable = current_slice[current_slice['stock_code'].isin(tradable_stocks)]
-                    
-                    filtered_count = len(merged) - len(tradable_stocks)
-                    if filtered_count > 0:
-                        print(f"  {date_str}: 过滤 {filtered_count} 只开盘涨停股")
-                else:
-                    tradable = current_slice
-            except Exception as e:
-                # 如果出错，就不过滤
-                print(f"  {date_str}: 获取T+1数据出错: {e}")
-                tradable = current_slice
-            
-        if tradable.empty:
-            continue
-            
-        # 4. 在可操作股票中选top N
-        selected = tradable.sort_values(by='prediction', ascending=False).head(top_n)
+        # 4. 严格按T日可知信息选Top N。T+1开盘价在信号生成时未知，
+        # 不再用它预先过滤或用后续股票替补。
+        selected = current_slice.sort_values(by='prediction', ascending=False).head(top_n)
         buy_list = selected['stock_code'].tolist()
         buy_list_set = set(buy_list)
         
@@ -346,7 +434,7 @@ class MyMultiFactorStrategy(bt.Strategy):
         ('buy_date', None), 
         ('sell_date', None), 
         ('trades', None),
-        ('stop_loss', 0.2),      # 止损比例：0.15（15%）
+        ('stop_loss', 0.2),      # 止损比例：0.2（20%）
     )
 
     def __init__(self):
@@ -378,7 +466,7 @@ class MyMultiFactorStrategy(bt.Strategy):
                 # 跌超8%就止损卖出
                 if current_price < cost_price * (1 - self.p.stop_loss):
                     self.order_target_percent(data=data, target=0)
-                    print(f"🛑 止损(15%): {data._name} 成本{cost_price:.2f} 现价{current_price:.2f} (跌{((current_price/cost_price-1)*100):.1f}%)")
+                    print(f"止损(20%): {data._name} 成本{cost_price:.2f} 现价{current_price:.2f} (跌{((current_price/cost_price-1)*100):.1f}%)")
         
         # === 步骤2：调仓日逻辑 ===
         is_buy_day = curr_dt in self.p.buy_date
@@ -476,7 +564,7 @@ def run_backtest(full_df, buy_date, sell_date, stock_list, strategy_params, trad
     
     if valid_count == 0:
         print("错误：没有成功加载任何股票数据！")
-        return None, None
+        return None, None, None
 
     cerebro.addstrategy(MyMultiFactorStrategy, buy_date=buy_date, sell_date=sell_date, trades=trades_list)
     
@@ -575,7 +663,24 @@ def run_backtest(full_df, buy_date, sell_date, stock_list, strategy_params, trad
 # ==========================================
 # 6. HTML报告生成
 # ==========================================
-def generate_html_report(exp_id, metrics, equity_df, output_dir):
+def plot_equity_comparison(equity_df, benchmark_nav, exp_id):
+    """绘制统一从1开始的策略与中证1000净值曲线。"""
+    strategy_nav = equity_df / equity_df.iloc[0]
+    fig, ax = plt.subplots(figsize=(12, 6))
+    strategy_nav.plot(ax=ax, label='Strategy', linewidth=1.8)
+    benchmark_nav.plot(ax=ax, label=BENCHMARK_PLOT_NAME, linewidth=1.5, alpha=0.85)
+    ax.set_title(f'Strategy vs {BENCHMARK_PLOT_NAME} - {exp_id}')
+    ax.set_ylabel('Normalized NAV')
+    ax.set_xlabel('Date')
+    ax.grid(True, alpha=0.3)
+    ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+    ax.legend()
+    return fig
+
+
+def generate_html_report(exp_id, metrics, equity_df, benchmark_nav,
+                         benchmark_metrics, output_dir,
+                         rebalance_text='每月最后一个交易日收盘生成信号，下一交易日开盘成交'):
     """生成HTML报告"""
     
     # 将图片转为base64
@@ -587,14 +692,8 @@ def generate_html_report(exp_id, metrics, equity_df, output_dir):
         buf.close()
         return img_base64
     
-    # 绘制净值曲线
-    fig, ax = plt.subplots(figsize=(12, 6))
-    equity_df.plot(ax=ax, title=f'Strategy Equity Curve - {exp_id}')
-    ax.set_ylabel('Portfolio Value')
-    ax.set_xlabel('Date')
-    ax.grid(True, alpha=0.3)
-    ax.axhline(y=STRATEGY_PARAMS['initial_cash'], color='r', linestyle='--', alpha=0.5, label='Initial')
-    ax.legend()
+    # 绘制策略与基准净值曲线
+    fig = plot_equity_comparison(equity_df, benchmark_nav, exp_id)
     
     img_base64 = fig_to_base64(fig)
     plt.close()
@@ -669,13 +768,38 @@ def generate_html_report(exp_id, metrics, equity_df, output_dir):
                 <div class="metric-label">平均亏损</div>
             </div>
         </div>
+
+        <h2>📉 {BENCHMARK_NAME}基准</h2>
+        <div class="metrics">
+            <div class="metric-box">
+                <div class="metric-value">{benchmark_metrics.get('total_return', np.nan):.2f}%</div>
+                <div class="metric-label">累计收益率</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-value">{benchmark_metrics.get('ann_return', np.nan):.2f}%</div>
+                <div class="metric-label">年化收益率</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-value">{benchmark_metrics.get('ann_vol', np.nan):.2f}%</div>
+                <div class="metric-label">年化波动率</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-value">{benchmark_metrics.get('sharpe', np.nan):.2f}</div>
+                <div class="metric-label">夏普比率</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-value">{benchmark_metrics.get('max_dd', np.nan):.2f}%</div>
+                <div class="metric-label">最大回撤</div>
+            </div>
+        </div>
         
         <div class="summary">
             <h3>📋 回测设置</h3>
             <ul>
                 <li><strong>模型:</strong> {exp_id}</li>
                 <li><strong>回测区间:</strong> {equity_df.index[0].strftime('%Y-%m-%d')} ~ {equity_df.index[-1].strftime('%Y-%m-%d')}</li>
-                <li><strong>调仓周期:</strong> 每月第一个交易日</li>
+                <li><strong>调仓周期:</strong> {rebalance_text}</li>
+                <li><strong>主基准:</strong> {BENCHMARK_NAME}（000852.SH）</li>
                 <li><strong>持仓数量:</strong> {STRATEGY_PARAMS['stocks_per_batch']}只</li>
                 <li><strong>初始资金:</strong> {STRATEGY_PARAMS['initial_cash']:,}</li>
             </ul>
@@ -703,6 +827,15 @@ def generate_html_report(exp_id, metrics, equity_df, output_dir):
 if __name__ == "__main__":
     args = parse_args()
     exp_id = args.exp_id
+    rebalance_frequency = os.environ.get(
+        'BACKTEST_REBALANCE_FREQUENCY', 'monthly_last'
+    )
+    report_variant = os.environ.get('BACKTEST_REPORT_VARIANT', '').strip()
+    rebalance_text = (
+        '每周最后一个交易日收盘生成信号，下一交易日开盘成交'
+        if rebalance_frequency == 'weekly_last'
+        else '每月最后一个交易日收盘生成信号，下一交易日开盘成交'
+    )
     
     print("="*60)
     print(f"多因子回测 - {exp_id}")
@@ -714,22 +847,32 @@ if __name__ == "__main__":
 
     
     # 创建输出目录
-    output_dir = PROJECT_ROOT / '04回测层' / 'reports' / exp_id
+    reports_root = PROJECT_ROOT / '04回测层' / 'reports'
+    output_dir = (
+        reports_root / report_variant / exp_id
+        if report_variant else reports_root / exp_id
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"输出目录: {output_dir}")
     
     # 加载数据
     master_df = load_and_merge_data(PATHS)
+    # 每次运行自动跟随预测与行情的共同最新日期，不再维护硬编码截止日。
+    STRATEGY_PARAMS['end_date'] = pd.Timestamp(
+        master_df.attrs['common_end']
+    ).to_pydatetime()
     
     # 诊断信息
     print(f"\n[诊断] 主表日期范围: {master_df.index.min()} ~ {master_df.index.max()}")
+    print(f"[诊断] 自动回测截止日: {STRATEGY_PARAMS['end_date']:%Y-%m-%d}")
 
-    # 生成信号（每月第一个交易日调仓）
+    # 生成信号（每月最后一个交易日收盘产生，下一交易日开盘成交）
     buy_date, sell_date, stock_list, rebalance_records = generate_signals(
         master_df,
         STRATEGY_PARAMS['stocks_per_batch'],
         STRATEGY_PARAMS['start_date'],
-        STRATEGY_PARAMS['end_date']
+        STRATEGY_PARAMS['end_date'],
+        rebalance_frequency=rebalance_frequency,
     )
     
     # 新增：保存调仓信号到CSV
@@ -755,6 +898,14 @@ if __name__ == "__main__":
                                                     STRATEGY_PARAMS, trades_list)
         
         if cerebro and metrics and equity_df is not None:
+            benchmark_nav, benchmark_metrics = load_benchmark(
+                equity_df.index.min(), equity_df.index.max()
+            )
+            print(
+                f"{BENCHMARK_NAME}: 累计收益 {benchmark_metrics['total_return']:.2f}% | "
+                f"Sharpe {benchmark_metrics['sharpe']:.2f} | "
+                f"最大回撤 {benchmark_metrics['max_dd']:.2f}%"
+            )
             # 1. 保存交易记录
             if trades_list:
                 trades_df = pd.DataFrame(trades_list)
@@ -763,17 +914,11 @@ if __name__ == "__main__":
                 print(f"交易记录已保存: {trades_path} ({len(trades_df)} 笔)")
             
             # 2. 保存净值曲线图
-            fig, ax = plt.subplots(figsize=(12, 6))
-            equity_df.plot(ax=ax, title=f'Strategy Equity Curve - {exp_id}')
-            ax.set_ylabel('Portfolio Value')
-            ax.set_xlabel('Date')
-            ax.grid(True, alpha=0.3)
-            ax.axhline(y=STRATEGY_PARAMS['initial_cash'], color='r', linestyle='--', alpha=0.5, label='Initial')
-            ax.legend()
+            fig = plot_equity_comparison(equity_df, benchmark_nav, exp_id)
             
             png_path = output_dir / 'equity_curve.png'
-            plt.savefig(png_path, dpi=150, bbox_inches='tight')
-            plt.close()
+            fig.savefig(png_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
             print(f"净值曲线已保存: {png_path}")
             
             # 打印最终收益（和HTML一致）
@@ -781,6 +926,10 @@ if __name__ == "__main__":
             print(f"\n最终收益: {equity_df.iloc[-1]:.2f} (收益率: {final_return:.2f}%)")
             
             # 3. 生成HTML报告
-            generate_html_report(exp_id, metrics, equity_df, output_dir)
+            generate_html_report(
+                exp_id, metrics, equity_df, benchmark_nav,
+                benchmark_metrics, output_dir,
+                rebalance_text=rebalance_text,
+            )
             
         print(f"\n所有输出文件保存在: {output_dir}")

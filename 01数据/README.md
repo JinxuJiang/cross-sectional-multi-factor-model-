@@ -12,6 +12,7 @@
 | 📊 等比前复权 | 原始价 × (adj_factor/最新adj_factor)，避免传统前复权的负数问题 |
 | 📅 财务全字段原始层 | 三张报表同时保存 `report_type=1/5`，四表全原生字段按季度分区，PIT 版本选择留给因子层 |
 | 🔄 断点续跑 | 行情每250交易日原子落盘分片、财务按表/季度原子写入，已完成自动跳过 |
+| 📉 回测基准 | 独立维护中证1000（000852.SH）日行情与完整交易安排 |
 | ✔️ 自动验证 | `validate_all` 覆盖行情/财务/状态/元数据四类检查，FAIL 非零退出 |
 
 ---
@@ -48,6 +49,7 @@
     │   └── update_log.json            #   更新记录
     └── tushare_data/                  # 新 Tushare 数据（当前正式数据源）
         ├── market_data/{code}.parquet #   行情（等比前复权，与旧格式一致）
+        ├── benchmark/000852.SH.parquet #  中证1000回测基准（日行情）
         ├── financial_full/{表}/{季度}.parquet # 财务四表全字段季度分区
         ├── st_status.parquet          #   ST状态宽表（0=正常, 1=ST）
         ├── suspend_status.parquet     #   停牌状态宽表（0/1）
@@ -55,7 +57,7 @@
         ├── industry_map.csv           #   申万一级行业映射
         ├── raw/                       #   中间层（断点续跑与复权重建的弹药库）
         │   ├── market/                #     daily / adj_factor / daily_basic（单文件或 *_shards/ 分片）
-        │   └── metadata/              #     stock_basic / trade_cal / stock_st / suspend_d 等原始表
+        │   └── metadata/              #     stock_basic / trade_cal / trade_schedule / stock_st 等
         ├── logs/                      #   验证与对拍报告
         └── update_log.json            #   更新记录
 ```
@@ -106,8 +108,8 @@ python 01数据/tushare_data_main.py --monthly
 python 01数据/tushare_monthly_update.py
 ```
 
-月更只更新 `01数据/data/tushare_data`，包括元数据、行情、财务原始分区、
-ST/停牌状态和数据层验证；**不会自动重建 `02因子库` 的宽表或计算因子**。
+月更只更新 `01数据/data/tushare_data`，包括元数据、中证1000基准、行情、
+财务原始分区、ST/停牌状态和数据层验证；**不会自动重建 `02因子库` 的宽表或计算因子**。
 
 ### 3️⃣ 数据更新后刷新因子层
 
@@ -145,6 +147,7 @@ python 02因子库/validate_tushare_factor_migration.py --full-values --pit-samp
 | 方法 | 说明 |
 |:---|:---|
 | `download_metadata()` | 元数据 → `stock_info.parquet` + `industry_map.csv` |
+| `download_benchmark_index()` | 中证1000日行情 → `benchmark/000852.SH.parquet` |
 | `download_market_data(start, end, missing_only=, build=)` | 行情两步：按日抓取 → 等比前复权构建 `market_data/{code}.parquet` |
 | `download_financial_data(start_period, end_period, overwrite=)` | 财务四表全字段；三张报表同时抓 type 1/5 → `financial_full/{表}/{季度}.parquet` |
 | `download_status_data(start, end, missing_only=, build=)` | ST/停牌事件表 → `st_status.parquet` + `suspend_status.parquet` |
@@ -156,6 +159,7 @@ python 02因子库/validate_tushare_factor_migration.py --full-values --pit-samp
 | 数据类型 | 策略 | 原因 |
 |:---|:---|:---|
 | 元数据 | 全量重抓 | 股票列表/交易日历会变化，成本低 |
+| 中证1000基准 | 全量重抓 | 数据量小，保证回测基准同步更新 |
 | 行情 | 缺失补齐 + 全量重建 per-stock | 等比前复权因子随分红除权漂移 |
 | 财务 | 重抓最近8个季度的 type 1/5（overwrite 原子替换） | 补齐披露季，并保留调整前版本 |
 | 状态 | 缺失补齐 + 重建宽表 | 事件表按日增量 |

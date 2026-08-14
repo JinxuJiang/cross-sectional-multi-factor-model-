@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import json
 import hashlib
+import copy
+import os
 import shutil
 import time
 from datetime import datetime
@@ -38,6 +40,7 @@ from models.lightgbm_rank_model import LightGBMRankModel
 
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class QuarterlyTrainerV2:
@@ -79,12 +82,41 @@ class QuarterlyTrainerV2:
         if self.freeze_enabled:
             self.state_models_dir.mkdir(parents=True, exist_ok=True)
 
-    def _config_hash(self) -> str:
-        qv2 = self.config.get("quarterly_v2", {})
-        wf = self.config.get("walk_forward", {})
+    @staticmethod
+    def _normalize_config_path(value):
+        """Normalize project paths so absolute and project-relative forms compare equal."""
+        if not isinstance(value, str) or not value.strip():
+            return value
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        normalized = str(path.resolve(strict=False))
+        return os.path.normcase(normalized)
+
+    @classmethod
+    def _normalized_data_config(cls, data_config: Dict) -> Dict:
+        data = copy.deepcopy(data_config)
+        factor_paths = data.get("factor_paths")
+        if isinstance(factor_paths, dict):
+            data["factor_paths"] = {
+                key: cls._normalize_config_path(value)
+                for key, value in factor_paths.items()
+            }
+        for key, value in list(data.items()):
+            if key.endswith("_path") and key != "factor_paths":
+                data[key] = cls._normalize_config_path(value)
+        return data
+
+    def _config_signature(self, config: Optional[Dict] = None, normalize_paths: bool = False) -> Dict:
+        config = config or self.config
+        qv2 = config.get("quarterly_v2", {})
+        wf = config.get("walk_forward", {})
+        data = config.get("data", {})
+        if normalize_paths:
+            data = self._normalized_data_config(data)
         signature = {
-            "data": self.config.get("data", {}),
-            "model": self.config.get("model", {}),
+            "data": data,
+            "model": config.get("model", {}),
             "quarterly_v2": {
                 "train_window": qv2.get("train_window"),
                 "valid_window": qv2.get("valid_window"),
@@ -96,6 +128,10 @@ class QuarterlyTrainerV2:
                 "train_window": wf.get("train_window"),
             },
         }
+        return signature
+
+    def _config_hash(self, config: Optional[Dict] = None, normalize_paths: bool = False) -> str:
+        signature = self._config_signature(config=config, normalize_paths=normalize_paths)
         dumped = yaml.dump(signature, sort_keys=True, allow_unicode=True)
         return hashlib.sha256(dumped.encode("utf-8")).hexdigest()[:16]
 
@@ -105,6 +141,7 @@ class QuarterlyTrainerV2:
             "schema_version": "qv2_freeze_1",
             "exp_id": self.exp_id,
             "config_hash": self._config_hash(),
+            "normalized_config_hash": self._config_hash(normalize_paths=True),
             "smooth_halflife": float(qv2.get("smooth_halflife", 10)),
             "smooth_window_multiplier": 2,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -121,10 +158,37 @@ class QuarterlyTrainerV2:
             with open(self.manifest_path, "r", encoding="utf-8") as f:
                 self.manifest = json.load(f)
             current_hash = self._config_hash()
+            current_normalized_hash = self._config_hash(normalize_paths=True)
             if self.manifest.get("config_hash") != current_hash:
-                raise ValueError(
-                    "freeze manifest 的关键配置与当前配置不一致；请换 exp_id 或使用 --reset-freeze"
+                compatible = self.manifest.get("normalized_config_hash") == current_normalized_hash
+
+                # Backward compatibility for manifests created before paths were normalized.
+                # The experiment config is the snapshot that originally produced the manifest.
+                if not compatible:
+                    saved_config_path = self.exp_dir / "config.yaml"
+                    if saved_config_path.exists():
+                        with open(saved_config_path, "r", encoding="utf-8") as f:
+                            saved_config = yaml.safe_load(f)
+                        saved_hash_matches_manifest = (
+                            self._config_hash(config=saved_config)
+                            == self.manifest.get("config_hash")
+                        )
+                        compatible = (
+                            saved_hash_matches_manifest
+                            and self._config_hash(config=saved_config, normalize_paths=True)
+                            == current_normalized_hash
+                        )
+
+                if not compatible:
+                    raise ValueError(
+                        "freeze manifest 的关键配置与当前配置不一致；请换 exp_id 或使用 --reset-freeze"
+                    )
+
+                logger.warning(
+                    "freeze: 配置仅存在绝对路径/项目相对路径差异，允许复用现有冻结状态"
                 )
+                self.manifest["config_hash"] = current_hash
+            self.manifest["normalized_config_hash"] = current_normalized_hash
         else:
             self.manifest = self._new_manifest()
 

@@ -46,6 +46,10 @@ def full_download(engine: TushareDataEngine, end_date: str = ""):
     print("\n📁 下载元数据...")
     engine.download_metadata(end_date=end)
 
+    # 回测主基准：中证1000
+    print("\n📉 下载基准指数数据...")
+    engine.download_benchmark_index(start_date="20100101", end_date=end)
+
     # 行情（抓取 + 构建 per-stock 文件，已抓交易日自动跳过）
     print("\n📈 下载行情数据...")
     engine.download_market_data(start_date="20100101", end_date=end, missing_only=True)

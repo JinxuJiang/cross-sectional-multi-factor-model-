@@ -116,6 +116,7 @@ class TushareDataEngine:
         self.suspend_file = self.root_path / "suspend_status.parquet"
         self.stock_info_file = self.root_path / "stock_info.parquet"
         self.industry_map_file = self.root_path / "industry_map.csv"
+        self.benchmark_dir = self.root_path / "benchmark"
 
         # 中间层与日志
         self.raw_market_dir = self.root_path / "raw" / "market"
@@ -134,7 +135,7 @@ class TushareDataEngine:
         self._ensure_directories()
 
     def _ensure_directories(self):
-        for path in [self.market_path, self.fin_path,
+        for path in [self.market_path, self.fin_path, self.benchmark_dir,
                      self.raw_market_dir, self.raw_metadata_dir, self.log_dir]:
             path.mkdir(parents=True, exist_ok=True)
 
@@ -288,6 +289,13 @@ class TushareDataEngine:
             self.call("trade_cal", exchange="", start_date=start_date, end_date=end_date,
                       fields="exchange,cal_date,is_open,pretrade_date"),
             self.raw_metadata_dir / "trade_cal.parquet")
+        # 单独保存当年完整交易安排，供月末信号识别使用。trade_cal 仍只到
+        # end_date，避免状态宽表提前出现尚未发生的交易日。
+        schedule_end = f"{end_date[:4]}1231"
+        self._save_frame(
+            self.call("trade_cal", exchange="", start_date=start_date, end_date=schedule_end,
+                      fields="exchange,cal_date,is_open,pretrade_date"),
+            self.raw_metadata_dir / "trade_schedule.parquet")
         self._save_frame(
             self.call_paged("namechange",
                             fields="ts_code,name,start_date,end_date,ann_date,change_reason"),
@@ -304,6 +312,34 @@ class TushareDataEngine:
         self.build_stock_info()
         self.build_industry_map()
         print("✅ 元数据完成")
+
+    def download_benchmark_index(self, start_date: str = DEFAULT_START_DATE,
+                                 end_date: str | None = None,
+                                 ts_code: str = "000852.SH") -> Path:
+        """下载并原子保存基准指数日行情（默认中证1000）。"""
+        if end_date is None:
+            end_date = dt.datetime.now().strftime("%Y%m%d")
+        fields = (
+            "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+        )
+        data = self.call(
+            "index_daily",
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+            fields=fields,
+        )
+        if data.empty:
+            raise RuntimeError(f"基准指数无数据: {ts_code} {start_date}~{end_date}")
+        data = (
+            data.drop_duplicates(["ts_code", "trade_date"], keep="last")
+            .sort_values("trade_date")
+            .reset_index(drop=True)
+        )
+        path = self.benchmark_dir / f"{ts_code}.parquet"
+        self._write_atomic(data, path)
+        print(f"saved {path} rows={len(data)}")
+        return path
 
     def _fetch_stock_basic(self) -> pd.DataFrame:
         fields = ("ts_code,symbol,name,area,industry,fullname,enname,cnspell,"
@@ -1159,6 +1195,19 @@ class TushareDataEngine:
             add("metadata", "trade_cal", "PASS" if max_date >= end else "WARN",
                 f"cal_max={max_date} end={end}")
 
+        schedule_path = self.raw_metadata_dir / "trade_schedule.parquet"
+        if not schedule_path.exists():
+            add("metadata", "trade_schedule", "FAIL", f"missing {schedule_path}")
+        else:
+            schedule = pd.read_parquet(schedule_path)
+            schedule_max = str(schedule["cal_date"].astype(str).max())
+            expected_schedule_end = f"{end[:4]}1231"
+            add(
+                "metadata", "trade_schedule",
+                "PASS" if schedule_max >= expected_schedule_end else "WARN",
+                f"schedule_max={schedule_max} expected={expected_schedule_end}",
+            )
+
         for f, name in [(self.stock_info_file, "stock_info"),
                         (self.industry_map_file, "industry_map")]:
             add("metadata", name, "PASS" if f.exists() else "FAIL",
@@ -1171,6 +1220,18 @@ class TushareDataEngine:
             last_open = open_dates[-1] if open_dates else ""
         except FileNotFoundError:
             pass
+
+        benchmark_path = self.benchmark_dir / "000852.SH.parquet"
+        if not benchmark_path.exists():
+            add("benchmark", "000852.SH", "FAIL", f"missing {benchmark_path}")
+        else:
+            benchmark = pd.read_parquet(benchmark_path, columns=["trade_date"])
+            benchmark_max = str(benchmark["trade_date"].astype(str).max())
+            add(
+                "benchmark", "000852.SH",
+                "PASS" if not last_open or benchmark_max >= last_open else "WARN",
+                f"benchmark_max={benchmark_max} last_open={last_open}",
+            )
 
         # ── 2. 行情覆盖 ──
         for name in ["daily", "adj_factor", "daily_basic"]:
