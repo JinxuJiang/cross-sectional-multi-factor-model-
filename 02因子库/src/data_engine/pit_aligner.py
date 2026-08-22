@@ -10,7 +10,7 @@ PIT (Point-in-Time) 对齐器
     财报1(2010Q1, 4/29公告) ─────── 财报2(2010Q2, 8/25公告) ─────── ...
          │                              │
          ▼                              ▼
-    2010-04-29 ~ 2010-08-24       2010-08-25 ~ 2010-10-27
+    2010-04-30 ~ 2010-08-25       2010-08-26 ~ 2010-10-28
         使用财报1数据                 使用财报2数据
 
 使用方法：
@@ -152,12 +152,12 @@ class PITAligner:
         current_record = valid_records[0]
         
         for trade_date in self.trading_calendar:
-            while (record_idx + 1 < len(valid_records) and 
-                   trade_date >= valid_records[record_idx + 1][0]):
+            while (record_idx + 1 < len(valid_records) and
+                   trade_date > valid_records[record_idx + 1][0]):
                 record_idx += 1
                 current_record = valid_records[record_idx]
             
-            if trade_date < current_record[0] and record_idx == 0:
+            if trade_date <= current_record[0] and record_idx == 0:
                 values = [np.nan] * len(value_fields)
             else:
                 record = current_record[1]

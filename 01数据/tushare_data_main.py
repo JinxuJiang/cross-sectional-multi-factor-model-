@@ -13,16 +13,16 @@ Tushare 数据下载主入口
   # 全量下载但只到指定日期（避免盘中获取未收盘数据）
   python tushare_data_main.py --full --end-date 20260727
 
-  # 月度更新（推荐每月周末运行）
-  python tushare_data_main.py --monthly
+  # 每周更新（推荐每周收盘后运行）
+  python tushare_data_main.py --weekly
 
   # 一次性重抓三张财务报表的 type 1 + type 5 历史版本
   python tushare_data_main.py --refresh-financial-versions
 
 模式说明:
   --full:    全量下载（行情/状态从2010年，财务从2010Q1，已抓分区自动跳过）
-  --monthly: 增量更新（行情补缺+全量重建，财务重抓最近8个季度，状态补缺，元数据刷新）
-  --refresh-financial-versions: 覆盖重抓三张财务报表的全部历史分区
+  --weekly:  增量更新（行情补缺+全量重建，财务重抓最近12个季度，状态补缺，元数据刷新）
+  --refresh-financial-versions: 重抓三张财务报表的全部历史分区，与已有版本追加合并（不删除旧行）
 """
 
 import argparse
@@ -76,11 +76,15 @@ def refresh_financial_versions(
     engine: TushareDataEngine,
     end_date: str = "",
 ):
-    """覆盖重抓三张财务报表，同时保存 report_type 1 和 5。"""
+    """重抓三张财务报表全部历史分区（type 1 + type 5），与已有版本追加合并。
+
+    注意：这是追加合并而非覆盖替换，旧版本行不会被删除，
+    不能用于清洗历史分区中的错误行（需要时请手动删除对应 parquet）。
+    """
     end = end_date or datetime.now().strftime("%Y%m%d")
     end_period = TushareDataEngine.latest_quarter_period(end)
     print(
-        "📊 覆盖重抓财务历史版本 "
+        "📊 重抓财务历史版本（追加合并） "
         f"20100331 ~ {end_period}（income/balancesheet/cashflow）..."
     )
     engine.download_financial_data(
@@ -94,24 +98,24 @@ def refresh_financial_versions(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tushare 数据下载工具 - 支持全量下载和月度增量更新",
+        description="Tushare 数据下载工具 - 支持全量下载和每周增量更新",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
   python tushare_data_main.py --full                    # 全量下载
   python tushare_data_main.py --full --end-date 20260727  # 避开盘中未收盘数据
-  python tushare_data_main.py --monthly                 # 月度增量更新
+  python tushare_data_main.py --weekly                  # 每周增量更新
   python tushare_data_main.py --refresh-financial-versions
         """,
     )
     parser.add_argument("--full", action="store_true",
                         help="全量下载模式（断点续跑，已有分区自动跳过）")
-    parser.add_argument("--monthly", action="store_true",
-                        help="月度更新模式（增量抓取 + 必要重建）")
+    parser.add_argument("--weekly", action="store_true",
+                        help="每周更新模式（增量抓取 + 必要重建）")
     parser.add_argument(
         "--refresh-financial-versions",
         action="store_true",
-        help="覆盖重抓三张财务报表全部历史分区，同时保存type 1和type 5",
+        help="重抓三张财务报表全部历史分区（type 1+5），与已有版本追加合并",
     )
     parser.add_argument("--end-date", default="",
                         help="结束日期 YYYYMMDD，默认今天。盘中运行建议指定昨天日期")
@@ -120,10 +124,10 @@ def main():
     if args.refresh_financial_versions:
         engine = TushareDataEngine()
         refresh_financial_versions(engine, end_date=args.end_date)
-    elif args.monthly:
-        from tushare_monthly_update import MonthlyTushareUpdater
-        updater = MonthlyTushareUpdater()
-        updater.monthly_update(end_date=args.end_date or None)
+    elif args.weekly:
+        from tushare_weekly_update import WeeklyTushareUpdater
+        updater = WeeklyTushareUpdater()
+        updater.weekly_update(end_date=args.end_date or None)
     elif args.full:
         engine = TushareDataEngine()
         full_download(engine, end_date=args.end_date)
@@ -131,7 +135,7 @@ def main():
         parser.print_help()
         print("\n💡 请选择运行模式:")
         print("   python tushare_data_main.py --full    # 全量下载")
-        print("   python tushare_data_main.py --monthly # 月度更新")
+        print("   python tushare_data_main.py --weekly # 每周更新")
         print("   python tushare_data_main.py --refresh-financial-versions")
 
 

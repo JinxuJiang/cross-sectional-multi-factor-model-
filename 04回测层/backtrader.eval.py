@@ -95,7 +95,7 @@ def load_month_end_dates(start_date, end_date, available_dates):
     if not TRADE_SCHEDULE_PATH.exists():
         raise FileNotFoundError(
             f"缺少完整交易安排: {TRADE_SCHEDULE_PATH}\n"
-            "请先运行: python 01数据/tushare_data_main.py --monthly"
+                "请先运行: python 01数据/tushare_data_main.py --weekly"
         )
     calendar = pd.read_parquet(TRADE_SCHEDULE_PATH)
     required = {'cal_date', 'is_open'}
@@ -127,7 +127,7 @@ def load_week_end_dates(start_date, end_date, available_dates):
     if not TRADE_SCHEDULE_PATH.exists():
         raise FileNotFoundError(
             f"缺少完整交易安排: {TRADE_SCHEDULE_PATH}\n"
-            "请先运行: python 01数据/tushare_data_main.py --monthly"
+                "请先运行: python 01数据/tushare_data_main.py --weekly"
         )
     calendar = pd.read_parquet(TRADE_SCHEDULE_PATH)
     required = {'cal_date', 'is_open'}
@@ -159,7 +159,7 @@ def load_benchmark(start_date, end_date):
     if not BENCHMARK_PATH.exists():
         raise FileNotFoundError(
             f"缺少中证1000基准行情: {BENCHMARK_PATH}\n"
-            "请先运行: python 01数据/tushare_data_main.py --monthly"
+                "请先运行: python 01数据/tushare_data_main.py --weekly"
         )
     benchmark = pd.read_parquet(BENCHMARK_PATH)
     if not {'trade_date', 'close'}.issubset(benchmark.columns):

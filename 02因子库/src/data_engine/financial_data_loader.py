@@ -8,9 +8,9 @@
 ---------
 1. 读取 market_data/close.parquet 获取交易日历
 2. 从 tushare_data/financial_full/ 读取三张季度分区表（income/balancesheet/cashflow）
-3. 版本选择：同 (ts_code, end_date) 有 type 5 取最早 type 5，否则取最早 type 1
+3. 版本事件：保留不同 f_ann_date，同日冲突保守选择 type 5 原始值
 4. 对每个股票：
-   - 三张表分别按自身 f_ann_date 构建 PIT 事件流
+   - 三张表分别按自身 f_ann_date 构建 PIT 事件流，下一交易日生效
    - 如需TTM：严格按连续报告期计算（累计值→单季度→4季度求和）
    - PIT对齐到交易日历
 5. 拼接成宽表（行：日期，列：股票代码）
@@ -200,11 +200,11 @@ class FinancialDataLoader:
 
     def _read_partition_table(self, table_name: str) -> pd.DataFrame:
         """
-        读取一张 Tushare 季度分区表（全部分区），做版本选择并重命名列
+        读取一张 Tushare 季度分区表（全部分区），保留 PIT 版本事件并重命名列
 
-        版本选择策略：同 (ts_code, end_date) 优先选择 report_type=5；
-        没有 type 5 时选择 report_type=1。候选内部取 f_ann_date 最早的整行，
-        同日并列时按 update_flag 升序。
+        同一报告期可以保留多个不同 f_ann_date。仅当同一股票、报告期和
+        公告日存在并列版本时，保守选择 type 5 调整前数据；没有 type 5
+        时优先 update_flag=0 的初始记录。
 
         参数：
         -----
@@ -231,20 +231,24 @@ class FinancialDataLoader:
             (pd.read_parquet(f, columns=read_cols) for f in files),
             ignore_index=True
         )
-        print(f"  {table_name}: {len(files)} 个分区, {len(df)} 行（版本选择前）")
+        print(f"  {table_name}: {len(files)} 个分区, {len(df)} 行（版本标准化前）")
 
         df = self._select_statement_versions(df)
-        print(f"  {table_name}: 版本选择后 {len(df)} 行")
+        print(f"  {table_name}: PIT 版本事件 {len(df)} 行")
 
         # 统一命名；严格使用该表自身的实际公告日期，不借用 ann_date 或其他表日期。
         df = df.rename(columns={'end_date': 'report_date', **col_map})
         df['m_anntime'] = df['f_ann_date']
-        keep_cols = ['ts_code', 'report_date', 'm_anntime'] + list(col_map.values())
+        keep_cols = [
+            'ts_code', 'report_date', 'm_anntime',
+            'ann_date', 'report_type', 'update_flag',
+            *col_map.values(),
+        ]
         return df[keep_cols]
 
     @staticmethod
     def _select_statement_versions(df: pd.DataFrame) -> pd.DataFrame:
-        """按“有最早 type 5，否则最早 type 1”选择每个报告期的一整行。"""
+        """Preserve one conservative PIT event per report period and announcement."""
         required = {
             'ts_code', 'end_date', 'f_ann_date',
             'report_type', 'update_flag',
@@ -271,28 +275,41 @@ class FinancialDataLoader:
                 f"发现 {missing_f_ann} 条 type 1/type 5 财务记录缺少有效 f_ann_date"
             )
 
-        has_type5 = work['_report_type'].eq('5').groupby(
-            [work['ts_code'], work['end_date']]
-        ).transform('any')
-        work = work.loc[
-            (has_type5 & work['_report_type'].eq('5'))
-            | (~has_type5 & work['_report_type'].eq('1'))
-        ].copy()
+        first_type1 = (
+            work.loc[work['_report_type'].eq('1')]
+            .groupby(['ts_code', 'end_date'])['_ann']
+            .min()
+        )
+        period_keys = pd.MultiIndex.from_frame(work[['ts_code', 'end_date']])
+        work['_first_type1_ann'] = first_type1.reindex(period_keys).to_numpy()
+        late_type5 = (
+            work['_report_type'].eq('5')
+            & work['_first_type1_ann'].notna()
+            & work['_ann'].gt(work['_first_type1_ann'])
+        )
+        work = work.loc[~late_type5].copy()
+
+        work = work.drop_duplicates().copy()
+        work['_type_order'] = work['_report_type'].map({'5': 0, '1': 1})
         work['_update_order'] = pd.to_numeric(
             work['update_flag'], errors='coerce'
         ).fillna(99)
         work = work.sort_values(
             by=[
                 'ts_code', 'end_date', '_ann',
-                '_update_order', '_report_type',
+                '_type_order', '_update_order',
             ],
             kind='mergesort',
         )
         work = work.drop_duplicates(
-            subset=['ts_code', 'end_date'], keep='first'
+            subset=['ts_code', 'end_date', 'f_ann_date'], keep='first'
         )
+        work['report_type'] = work['_report_type']
         return work.drop(
-            columns=['_report_type', '_ann', '_update_order'],
+            columns=[
+                '_report_type', '_ann', '_first_type1_ann',
+                '_type_order', '_update_order',
+            ],
             errors='ignore',
         )
 

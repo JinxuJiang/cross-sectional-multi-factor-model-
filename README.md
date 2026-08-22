@@ -85,7 +85,7 @@ label(T) = open[T + horizon + 1] / open[T + 1] - 1
 ├── 01数据/
 │   ├── Base_TushareEngine.py
 │   ├── tushare_data_main.py
-│   ├── tushare_monthly_update.py
+│   ├── tushare_weekly_update.py
 │   └── README.md
 ├── 02因子库/
 │   ├── src/data_engine/
@@ -143,10 +143,10 @@ pip install lightgbm pyyaml optuna matplotlib backtrader alphalens-reloaded
 python 01数据/tushare_data_main.py --full
 ```
 
-日常月度更新：
+日常每周更新：
 
 ```powershell
-python 01数据/tushare_data_main.py --monthly
+python 01数据/tushare_data_main.py --weekly
 ```
 
 数据层只负责更新 `01数据/data/tushare_data/`，不会自动重建因子。

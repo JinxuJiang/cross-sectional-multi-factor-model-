@@ -668,7 +668,7 @@ class TushareDataEngine:
         """
         从 raw 行情数据构建 market_data/{code}.parquet（全量重建）
 
-        注意：等比前复权因子随分红除权漂移，月度更新时需要全量重建，
+        注意：等比前复权因子随分红除权漂移，每周更新时需要全量重建，
         与旧 QMT 流程"行情每月全量覆盖"的原因一致。
         """
         if end_date is None:
@@ -742,6 +742,18 @@ class TushareDataEngine:
     def financial_partition_path(self, table: str, period: str) -> Path:
         return self.fin_path / table / f"{period}.parquet"
 
+    @staticmethod
+    def _merge_financial_versions(
+        existing: pd.DataFrame,
+        refreshed: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Append newly observed versions without deleting prior vendor rows."""
+        return (
+            pd.concat([existing, refreshed], ignore_index=True, sort=False)
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+
     def download_financial_data(self,
                                 start_period: str = DEFAULT_FINANCIAL_START_PERIOD,
                                 end_period: str | None = None,
@@ -755,7 +767,8 @@ class TushareDataEngine:
         -----
         start_period / end_period : str, 'YYYYMMDD' 季度末日期（如 20100331）
         tables : 默认全部四表
-        overwrite : 重新抓取并原子替换已有分区（披露季内刷新未完整季度用）
+        overwrite : 重新抓取已有分区，并与旧版本追加合并而非替换
+            （披露季内刷新未完整季度用；旧版本行保留，保证 PIT 可复现）
         """
         if end_period is None:
             end_period = self.latest_quarter_period()
@@ -823,6 +836,12 @@ class TushareDataEngine:
 
         df = df.drop_duplicates().copy()
         df["query_period"] = period
+        if path.exists():
+            existing = pd.read_parquet(path)
+            # Financial refreshes are append-only at the version level. A later
+            # f_ann_date or an adjusted-before row must not erase a version that
+            # was used by an earlier point-in-time date.
+            df = self._merge_financial_versions(existing, df)
         sort_cols = [c for c in ["ts_code", "end_date", "f_ann_date", "ann_date",
                                  "report_type", "update_flag"] if c in df.columns]
         if sort_cols:

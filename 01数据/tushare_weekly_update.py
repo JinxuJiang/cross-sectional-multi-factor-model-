@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Tushare 月度数据更新模块
+Tushare 每周数据更新模块
 ========================
 
 与旧 QMT 的 monthly_update.py 对应，继承 TushareDataEngine 增加增量策略。
@@ -11,8 +11,8 @@ Tushare 月度数据更新模块
 2. 基准: 全量刷新中证1000指数日行情
 3. 行情: 只抓缺失交易日 + 全量重建 per-stock 文件
    - 原因: 等比前复权因子随分红除权漂移，历史价格需整体修正
-4. 财务: 重抓最近 8 个季度分区（--overwrite 原子替换）
-   - 原因: 年报披露可拖至次年 4 月底，且公司可能发布跨年业绩修正
+4. 财务: 重抓最近 12 个季度分区并追加合并历史版本
+   - 原因: 周更时覆盖最近三年的比较数据重述，旧版本不得被更新覆盖
 5. 状态: 只抓缺失交易日 + 重建宽表
 6. 总验证: 行情覆盖 / 财务分区 / 状态宽表 / 元数据完整性
 7. 更新日志
@@ -20,9 +20,9 @@ Tushare 月度数据更新模块
 使用方法:
 ---------
 ```bash
-python tushare_data_main.py --monthly
+python tushare_data_main.py --weekly
 # 或直接
-python tushare_monthly_update.py
+python tushare_weekly_update.py
 ```
 """
 
@@ -37,30 +37,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from Base_TushareEngine import TushareDataEngine
 
 
-class MonthlyTushareUpdater(TushareDataEngine):
-    """Tushare 月度数据更新器 - 继承自基础数据引擎"""
+class WeeklyTushareUpdater(TushareDataEngine):
+    """Tushare 每周数据更新器 - 继承自基础数据引擎"""
 
     @property
     def log_file(self) -> Path:
         return self.root_path / "update_log.json"
 
-    def monthly_update(self, end_date: str | None = None,
-                       financial_lookback_quarters: int = 8):
+    def weekly_update(self, end_date: str | None = None,
+                      financial_lookback_quarters: int = 12):
         """
-        执行月度数据更新
+        执行每周数据更新
 
         参数:
         -----
         end_date : 结束日期 'YYYYMMDD'，默认今天。盘中运行建议指定昨天
-        financial_lookback_quarters : 财务重抓最近几个季度分区，默认 8
-            （覆盖年报延迟披露与跨年业绩修正）
+        financial_lookback_quarters : 财务重抓最近几个季度分区，默认 12
+            （覆盖最近三年的比较数据重述；历史版本只追加、不覆盖）
         """
         end = end_date or datetime.now().strftime("%Y%m%d")
         # 只覆盖已到来的季度报告期，避免抓取未来季度返回空数据
         end_period = self.latest_quarter_period(end)
 
         print("=" * 60)
-        print(f"🚀 开始 Tushare 月度数据更新 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🚀 开始 Tushare 每周数据更新 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
 
         # 1. 元数据 - 全量重抓（同时刷新交易日历，是后续步骤的前提）
@@ -113,9 +113,9 @@ class MonthlyTushareUpdater(TushareDataEngine):
 
         print("\n" + "=" * 60)
         if n_fail:
-            print(f"⚠️ 月度更新完成，但验证有 {n_fail} 项 FAIL，请检查报告！")
+            print(f"⚠️ 每周更新完成，但验证有 {n_fail} 项 FAIL，请检查报告！")
             raise SystemExit(1)
-        print("✅ 月度数据更新完成！")
+        print("✅ 每周数据更新完成！")
         print("=" * 60)
 
     def _save_update_log(self, n_fail: int, n_warn: int):
@@ -130,15 +130,15 @@ class MonthlyTushareUpdater(TushareDataEngine):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tushare 月度数据更新工具")
+    parser = argparse.ArgumentParser(description="Tushare 每周数据更新工具")
     parser.add_argument("--end-date", default="",
                         help="结束日期 YYYYMMDD，默认今天。盘中运行建议指定昨天")
-    parser.add_argument("--financial-lookback-quarters", type=int, default=8,
-                        help="财务重抓最近几个季度分区 (默认: 8)")
+    parser.add_argument("--financial-lookback-quarters", type=int, default=12,
+                        help="财务重抓最近几个季度分区 (默认: 12)")
     args = parser.parse_args()
 
-    updater = MonthlyTushareUpdater()
-    updater.monthly_update(
+    updater = WeeklyTushareUpdater()
+    updater.weekly_update(
         end_date=args.end_date or None,
         financial_lookback_quarters=args.financial_lookback_quarters,
     )

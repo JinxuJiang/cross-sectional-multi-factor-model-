@@ -24,8 +24,8 @@
 ```
 01数据/
 ├── Base_TushareEngine.py     # Tushare 核心引擎：连接/抓取/清洗/存储全部逻辑
-├── tushare_data_main.py      # 数据入口（--full / --monthly / --refresh-financial-versions）
-├── tushare_monthly_update.py # 月度增量更新（继承引擎，加增量策略）
+├── tushare_data_main.py      # 数据入口（--full / --weekly / --refresh-financial-versions）
+├── tushare_weekly_update.py  # 每周增量更新（继承引擎，加增量策略）
 ├── tushare_token.txt         # Tushare token（本地文件，已 gitignore，不提交）
 └── README.md                 # 本文档
 ```
@@ -92,9 +92,9 @@ python 01数据/tushare_data_main.py --full --end-date 20260727
 python 01数据/tushare_data_main.py --refresh-financial-versions
 ```
 
-正常首次下载和后续月更不需要重复执行这个历史补抓命令。
+正常首次下载和后续周更不需要重复执行这个历史补抓命令。
 
-### 2️⃣ 日常月度更新
+### 2️⃣ 日常每周更新
 
 下面两个命令是同一套更新流程，**二选一，不要重复运行**：
 
@@ -102,13 +102,13 @@ python 01数据/tushare_data_main.py --refresh-financial-versions
 conda activate qf
 
 # 推荐：通过统一入口运行
-python 01数据/tushare_data_main.py --monthly
+python 01数据/tushare_data_main.py --weekly
 
-# 等价写法：直接运行月更脚本
-python 01数据/tushare_monthly_update.py
+# 等价写法：直接运行周更脚本
+python 01数据/tushare_weekly_update.py
 ```
 
-月更只更新 `01数据/data/tushare_data`，包括元数据、中证1000基准、行情、
+周更只更新 `01数据/data/tushare_data`，包括元数据、中证1000基准、行情、
 财务原始分区、ST/停牌状态和数据层验证；**不会自动重建 `02因子库` 的宽表或计算因子**。
 
 ### 3️⃣ 数据更新后刷新因子层
@@ -154,14 +154,14 @@ python 02因子库/validate_tushare_factor_migration.py --full-values --pit-samp
 | `validate_financial_data(...)` | 财务分区校验（schema/键/重复行/披露季完整性） |
 | `validate_all(end_date=)` | 总验证：行情覆盖/财务/状态/元数据，报告落盘 `logs/validation_report.json` |
 
-### 5️⃣ 月度更新策略
+### 5️⃣ 每周更新策略
 
 | 数据类型 | 策略 | 原因 |
 |:---|:---|:---|
 | 元数据 | 全量重抓 | 股票列表/交易日历会变化，成本低 |
 | 中证1000基准 | 全量重抓 | 数据量小，保证回测基准同步更新 |
 | 行情 | 缺失补齐 + 全量重建 per-stock | 等比前复权因子随分红除权漂移 |
-| 财务 | 重抓最近8个季度的 type 1/5（overwrite 原子替换） | 补齐披露季，并保留调整前版本 |
+| 财务 | 重抓最近12个季度的 type 1/5，并与旧分区追加合并 | 周更覆盖最近三年的重述，历史版本不覆盖 |
 | 状态 | 缺失补齐 + 重建宽表 | 事件表按日增量 |
 
 ---
@@ -205,7 +205,7 @@ python 02因子库/validate_tushare_factor_migration.py --full-values --pit-samp
 │  • 三张报表显式请求 report_type=1 和 5   │
 │  • type 1=当前最新；type 5=调整前保留版  │
 └──────────────────┬──────────────────────┘
-                   │  按 表/季度 原子写入
+                   │  按 表/季度 版本追加后原子写入
                    ▼
      financial_full/{表}/{季度}.parquet
                    │
@@ -213,9 +213,9 @@ python 02因子库/validate_tushare_factor_migration.py --full-values --pit-samp
      schema一致性 / 必要列 / 重复行 / 披露季完整性
 ```
 
-> PIT 版本选择**不在本层做**。因子层对三张表分别处理：同一公司、同一张表、
-> 同一报告期有 type 5 时取最早 type 5，否则取最早 type 1；每张表只使用
-> 自己的 `f_ann_date`，不借用利润表日期。
+> PIT 版本选择**不在本层做**。因子层按每条记录自己的 `f_ann_date` 依次
+> 应用版本；同日 type 1/type 5 冲突时保守选择 type 5。每张表只使用自己的
+> 实际公告日期，并从公告后的第一个交易日生效。
 
 ### 状态数据（ST/停牌）
 
@@ -237,7 +237,7 @@ suspend_status.parquet 0=正常, 1=停牌
 
 - **传统前复权**：历史价直接减分红，可能出现负数，收益率计算失真
 - **等比前复权**：`adjusted = raw_price × (adj_factor / 最新adj_factor)`，始终为正
-- 代价：分红除权后历史复权价会"漂移"，所以月更时用 raw 层**全量重建** per-stock 文件
+- 代价：分红除权后历史复权价会"漂移"，所以周更时用 raw 层**全量重建** per-stock 文件
 
 ### 财务为什么在原始层保留 type 1/5
 
@@ -296,7 +296,7 @@ suspend_status.parquet 0=正常, 1=停牌
 - 因子层迁移验收（`validate_tushare_factor_migration.py`）：**PASS=9 / FAIL=0**；
 - 45个因子（21技术+24财务）已全部基于 Tushare 数据重建；
 - QMT 三件套代码、迁移临时脚本、调试残留已清理；
-- 2026Q2仍处于披露季，后续 `--monthly` 会继续补齐。
+- 2026Q2仍处于披露季，后续 `--weekly` 会继续补齐。
 
 ---
 

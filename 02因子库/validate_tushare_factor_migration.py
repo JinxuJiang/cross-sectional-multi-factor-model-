@@ -339,6 +339,10 @@ def merge_announcement_dates() -> pd.DataFrame:
     frames: Dict[str, pd.DataFrame] = {}
     for table_name in ("income", "balancesheet", "cashflow"):
         frame = read_version_selected_table(table_name)
+        frame = (
+            frame.sort_values(["ts_code", "end_date", "_ann"], kind="mergesort")
+            .drop_duplicates(["ts_code", "end_date"], keep="first")
+        )
         frames[table_name] = frame[
             ["ts_code", "end_date", "_ann"]
         ].rename(columns={"_ann": f"ann_{table_name}"})
