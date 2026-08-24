@@ -1,11 +1,11 @@
 data:
   factor_paths:
-    technical: C:\Users\蒋大王\Desktop\量化\截面多因子模型\02因子库\processed_data\factors\technical
-    financial: C:\Users\蒋大王\Desktop\量化\截面多因子模型\02因子库\processed_data\factors\financial
-  market_data_path: C:\Users\蒋大王\Desktop\量化\截面多因子模型\02因子库\processed_data\market_data
+    technical: 02因子库/processed_data/factors/technical
+    financial: 02因子库/processed_data/factors/financial
+  market_data_path: 02因子库/processed_data/market_data
   price_column: close
   open_column: open
-  st_status_path: C:\Users\蒋大王\Desktop\量化\截面多因子模型\01数据\data\tushare_data\st_status.parquet
+  st_status_path: 01数据/data/tushare_data/st_status.parquet
   profit_filter_pct: 0.2
   label:
     horizon: 5
@@ -45,7 +45,7 @@ training:
   save_feature_importance: true
   log_level: INFO
 output:
-  experiments_dir: C:\Users\蒋大王\Desktop\量化\截面多因子模型\03模型训练层\experiments
+  experiments_dir: 03模型训练层/experiments
   model_filename: model_fold_{fold_id:03d}.pkl
   importance_filename: importance_fold_{fold_id:03d}.csv
   predictions_filename: predictions.parquet
